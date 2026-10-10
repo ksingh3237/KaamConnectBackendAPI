@@ -1,0 +1,85 @@
+# 07 · Implementation Roadmap
+
+Estimates are **working days for one senior backend developer**, including tests and docs for the phase, excluding waiting on third parties (SMS DLT approval, cloud accounts) and excluding mobile-app integration work. Each phase ends green: `tsc`, lint, unit + e2e tests, build, migration drift check. No phase starts before the previous one's acceptance criteria are met. **Nothing below starts until you approve.**
+
+| Phase | Goal | Priority | Effort |
+|---|---|---|---|
+| 0 | Decisions, repo and tooling | P0 | 2–3 d |
+| 1 | Schema, reference data, catalog API | P1 | 3 d |
+| 2 | Auth & account | P1 | 4–5 d |
+| 3 | Profiles, media, verification | P1 | 5–6 d |
+| 4 | Jobs, leads, offers, direct booking, real-time gateway | P1 | 8–11 d |
+| 5 | Fulfilment: tracking → bill → payment | P1 | 7–8 d |
+| 6 | Reviews, activity, earnings, savings, receipt | P2 | 3–4 d |
+| 7 | Hardening & release | P1 | 4–5 d |
+| 8 | Optional: MSG91 + WhatsApp OTP, Redis (cache + Socket.IO adapter), push, PDF, admin UI | P3 | scoped separately |
+| **Total (0–7)** | | | **≈ 36–45 d (8–10 weeks)** |
+
+Realistic range assumes answers to the open questions arrive in week 1. Add ~20 % contingency for third-party onboarding (SMS provider DLT, bucket/KMS setup).
+
+---
+
+## Phase 0 — Decisions, repo, tooling (2–3 d)
+**Files:** `package.json`, `tsconfig*.json`, `nest-cli.json`, `eslint/prettier`, `.env.example`, `.gitignore`, `prisma.config.ts`, `src/main.ts`, `app.module.ts`, `config/*`, `prisma/prisma.service.ts`, `health/*`, `.github/workflows/ci.yml`, README.
+**Work:** git repo already initialised (D-7); scaffold Nest 12; pin Prisma 7.10 (Q-14) and confirm it works against local PostgreSQL 18 (D-1); connect to the existing `KaamConnect` / `KaamConnect_test` databases (ask before creating anything); env validation incl. production guards for dev-only switches; global pipes/filters/guards skeleton; health endpoints; CI.
+**Acceptance:** `npm run start:dev` boots, `/health/ready` is green with DB up and red with DB down; CI passes on an empty test; boot fails with a clear message for missing/invalid env.
+**Risks:** Nest 12 / Prisma 7 adapter ESM-vs-CJS friction → mitigate by doing a throwaway spike first hour.
+
+## Phase 1 — Schema, reference data, catalog (3 d)
+**Files:** `prisma/schema.prisma` (from `docs/proposed-schema.prisma`), baseline migration + hand-written SQL constraints, `prisma/seed.ts`, `prisma/data/*`, `modules/catalog/*`.
+**Endpoints:** `GET /locations`, `GET /service-categories`.
+**Acceptance:** fresh DB → migrate → seed produces 8 categories, 3 cities, ≥ 12 areas; seed re-run is a no-op; drift check empty; constraint tests (radius 5 rejected, two primary addresses rejected) pass.
+**Risks:** area centroid coordinates unavailable → temporarily null (distance falls back to "same area").
+
+## Phase 2 — Auth & account (4–5 d)
+**Files:** `modules/auth/*` (otp, token, sender interface + console sender + provider impl), `modules/users/*`, `common/guards|decorators`, throttler config.
+**Endpoints:** `/auth/otp/request`, `/auth/otp/verify`, `/auth/refresh`, `/auth/logout`, `GET/PATCH /me`.
+**Acceptance:** golden path in e2e; lockout after 5 wrong codes; cooldown enforced; refresh rotation + reuse revocation; no OTP/tokens in logs; dev bypass impossible in production config.
+**Work note (D-2):** `OtpSender` interface with the console sender only; `channel=WHATSAPP` returns `501`. **Risks:** MSG91 integration waits on DLT registration (days–weeks) — start it in parallel; nothing in Phases 0–7 is blocked by it.
+
+## Phase 3 — Profiles, media, verification (5–6 d)
+**Files:** `modules/customers`, `modules/workers` (profile, documents, location), `modules/media` (+ S3 impl), `modules/admin` (verify/reject), seed-demo (partial).
+**Endpoints:** `PUT/GET/PATCH /customers/me`, addresses CRUD, `PUT/GET/PATCH /workers/me`, `PUT /workers/me/documents/:type`, `PUT /workers/me/location`, `POST /media/presign`, `GET /admin/workers`, `POST /admin/workers/:id/(verify|reject)`.
+**Acceptance:** onboarding payloads from both screens round-trip; 3 trades / radius 5 / 0 languages rejected; key-prefix forgery rejected; Aadhaar keys never appear in non-admin responses; unverified workers excluded from later discovery.
+**Work note (D-4):** `WORKER_VERIFICATION_MODE=auto` (dev: approve on save when both Aadhaar images exist) vs `manual` (production: admin endpoints). Tests cover both modes and the production boot guard. **Risks:** Aadhaar compliance/legal review could change the document flow; object-storage account setup.
+
+## Phase 4 — Jobs, leads, offers (6–8 d)
+**Files:** `modules/jobs` (create/list/get/cancel, state machine, expiry sweeper), `modules/offers` (leads feed, send/revise/withdraw, accept), `workers` discovery (`GET /workers`), `common/utils/geo.ts`, cursor util.
+**Also:** `modules/realtime` (Socket.IO gateway, handshake JWT auth, rooms, `RealtimePublisher`), events `lead.new/lead.closed/direct.request/direct.declined/direct.expired/offer.*/job.status`; direct-booking flow (D-3) with `DIRECT_ACCEPT_TTL_MIN` expiry.
+**Endpoints:** `POST /jobs`, `POST /jobs/direct-booking`, `POST /jobs/:id/direct/(accept|decline)`, `GET /customers/me/jobs`, `GET /jobs/:id`, `GET /jobs/:id/offers`, `POST /jobs/:id/offers/:offerId/accept`, `POST /jobs/:id/cancel`, `GET /leads`, `GET /leads/:id`, `POST /leads/:id/offers`, `GET /workers`, `GET /workers/:id`.
+**Acceptance:** (realtime) socket with forged/expired JWT refused; `lead.new` reaches only matching verified workers and never a direct job; `offer.new` reaches only the job's customer; direct request: target accepts → ASSIGNED, decline/expiry → CANCELLED and customer notified, other workers never see it; worker sees only matching-trade, in-radius, OPEN leads; address never in lead payload; duplicate quote → 409; concurrent accepts → exactly one winner; expired jobs become CANCELLED; all state-machine rows covered by tests; discovery p95 < 300 ms on seeded 5k workers.
+**Risks:** distance/radius semantics without GPS (area-centroid fallback); lead-feed query cost → verified by `EXPLAIN` against the proposed index.
+
+## Phase 5 — Fulfilment (6–7 d)
+**Files:** `jobs` (tracking, arrival, bill, payment, receipt), `modules/safety`, `workers/location`.
+**Endpoints:** `GET /jobs/:id/tracking`, `POST /jobs/:id/arrival`, `PUT /jobs/:id/bill-items`, `POST /jobs/:id/work-photos`, `POST /jobs/:id/bill/approve`, `POST /jobs/:id/complete-work`, `GET /jobs/:id/bill`, `POST /jobs/:id/payment`, `GET /jobs/:id/receipt`, `POST /jobs/:id/sos`, `GET /workers/me/jobs`.
+**Acceptance:** full lifecycle in e2e; arrival lockout after 5 tries; payment total always equals Σ items and platformFee is 0; double-pay is idempotent; stale GPS (> 2 min) flagged in tracking payload; SOS persists and notifies configured channel.
+**Also:** `job.location` / `bill.updated` events, `location:update` socket event (throttled). **Risks:** ETA quality without a routing provider (straight-line × speed) — acceptable for v1, flagged to product; payment honesty (customer self-reports) → optional worker-confirm path exists.
+
+## Phase 6 — Reviews, activity, earnings, savings (3–4 d)
+**Endpoints:** `POST /jobs/:id/review`, `GET /me/savings`, `GET /workers/me/earnings`, worker activity list, `GET /workers/:id` review summary.
+**Acceptance:** review once per completed job by owner only; aggregates update atomically (concurrent reviews don't lose counts); activity tab counts match lists; IST day boundary tested around midnight.
+**Note (D-5):** benchmark rate is config (default 20 %); `GET /me/savings` returns `benchmarkRate` so the app can disclose the basis.
+
+## Phase 7 — Hardening & release (4–5 d)
+**Work:** IDOR matrix tests, throttling tuning, load smoke, `EXPLAIN` review, OpenAPI export + contract check, Dockerfile/Procfile (per host decision), production env checklist, backup/restore drill, runbook, `DELETE /me` account deletion if approved (Q-17), dependency audit.
+**Acceptance:** CI green incl. coverage gates; golden-path e2e passes against a staging deployment; migrations applied via the release step on staging from an empty and from a previous-version DB; `npm audit` clean for high/critical.
+
+## Phase 8 — Optional (separate estimate after launch feedback)
+MSG91 SMS provider (after DLT) and WhatsApp OTP · Redis: cache, Socket.IO adapter, throttler storage (when moving to AWS) · Push notifications for offline workers/customers (requires `DeviceToken` table + Expo/FCM; app has no push SDK today) · PDF receipts · real admin web UI · worker online/availability toggle · routing/ETA provider · PostGIS.
+
+---
+
+## Cross-phase risks
+
+| # | Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|---|
+| R-1 | Prisma CLI mismatch (`npm i prisma` gives v8 RC with no `generate`/`migrate dev`) | High if unpinned | Blocks work | Exact version pin + CI check |
+| R-2 | SMS DLT / WhatsApp approval lead time | High | Blocks production launch (not development) | Start now; console sender for dev (D-2) |
+| R-3 | Aadhaar legal exposure | Medium | High | No number stored; encrypted images; legal review before launch (Q-7) |
+| R-4 | UI/back-end drift (fields UI never collects: UPI, vehicle, fee, cancel, emergency contact) | High | Medium | Gap list `01-requirements.md §8`; agree the frontend change list before Phase 3 |
+| R-5 | Socket.IO behind a load balancer (AWS): sticky sessions / websocket-only transport, Redis adapter when >1 instance | Medium | Medium | Single instance at launch; Redis seam ready (D-6) |
+| R-6 | Distance accuracy from area centroids | Medium | Medium | Prefer GPS when present; centroids verified by someone local |
+| R-7 | Customer self-reported payment disputes | Medium | Medium | Optional worker confirmation, audit trail via timestamps |
+| R-8 | Lost real-time events (best-effort delivery) | Medium | Low | REST refetch on reconnect/foreground; Postgres is source of truth |
+| R-9 | Prisma 7.10 vs PostgreSQL 18 compatibility and shadow-DB permission on the local role | Low–Med | Blocks `migrate dev` | Verify first in Phase 0; use dedicated shadow DB if needed |
