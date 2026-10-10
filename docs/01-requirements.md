@@ -93,6 +93,21 @@ Customers post a job (or book a worker directly); verified workers send quotes; 
 - Support numbers appear as `1800-123-4567` (Home drawer) and `1800-KAAM-CONNECT` (Profile): serve one value from config.
 - "Notifications" bell routes to Activity (no inbox screen) ⇒ **no notification-inbox API in v1**. Push for "new lead" / "new offer" is implied but not designed in the UI (Phase 8, optional).
 
+### FR-SCHEDULING (requested 2026-10-10; extends Phase 4, ahead of Phase 5)
+Workers keep receiving and answering leads while they are busy, and customers can book for later today, tomorrow or a future date. The ten requirements, in the order given:
+1. A worker's active job never blocks `lead.new`, the lead feed or lead detail.
+2. A worker can review, accept, decline and quote on opportunities (direct requests: accept or decline) at any time.
+3. Jobs can be scheduled for later today, tomorrow or another future date (`scheduledFor`).
+4. Before a booking is confirmed the worker's availability is validated and overlapping confirmed appointments are detected (BR-13 to BR-17).
+5. **Lead received**, **lead accepted / declined**, **quote submitted**, **quote accepted by the customer** and **booking confirmed** are separate recorded states with separate events (BR-18).
+6. One job in progress plus any number of non-conflicting future confirmed bookings (BR-14).
+7. Nearby-lead discovery uses the worker's current location when it is fresh; a future job is judged by its own place and time (BR-19, BR-20).
+8. After a job ends the app is asked for a fresh location, and the next fix re-runs lead matching (BR-21).
+9. A future booking is not limited to the 6 km live radius when the worker has said they will travel farther (`scheduledRadiusKm`, BR-20).
+10. Socket.IO notifications keep working and a worker is never sent the same lead twice (BR-22).
+
+**Delivered 2026-10-11, and its Phase 5 dependencies delivered 2026-10-11** (the Phase 5 contract is `03-api-spec.md §11`; scheduling contract: `03-api-spec.md §10`; design: `04-architecture.md §9`; tests: `05-security-testing.md §8`). Decisions Q-23 to Q-26 approved the same day (D-11 to D-14). Built and tested; migrations `20261010180000_scheduling_and_availability` and `20261011090000_category_default_duration` are applied to **both** the test and the dev database. **Phase 5 (2026-10-11) built what was missing:** arrival, bill, completion, payment, tracking, SOS and a worker backing out, each covered by a real test in `test/phase5-requirements.e2e-spec.ts` (which began as 22 pending tests). Still **not built:** worker payment confirmation, admin SOS acknowledgement, PDF receipts. Also not built: rescheduling an existing booking, a service default duration shown in the app API, and real per-service minutes (no numbers supplied yet).
+
 ## 6. Business rules
 
 | ID | Rule | Source |
@@ -109,6 +124,16 @@ Customers post a job (or book a worker directly); verified workers send quotes; 
 | BR-10 | Only the job's customer can review, once, after the job is completed | ❓ (natural) |
 | BR-11 | Savings = Σ paid job totals × benchmark commission rate | ❓ rate unknown (Q-9) |
 | BR-12 | Distances/ETA are computed server-side, not stored | ✅ |
+| BR-13 | **Booking window.** A confirmed job occupies `[bookedStartAt, bookedEndAt)`. Scheduled jobs start at `scheduledFor`; immediate jobs start at confirmation time + the quote's ETA. Length = `durationMin` (default 90) | FR-SCHEDULING |
+| BR-14 | **Capacity.** A worker may have at most one job in progress (`ARRIVED` / `IN_PROGRESS`) and any number of `ASSIGNED` bookings, provided no window overlaps and the travel gap (BR-15) holds. A job in progress that overruns its window keeps the worker busy until it ends | FR-SCHEDULING |
+| BR-15 | **Travel gap.** Between two bookings: at least `BOOKING_BUFFER_MIN` (15) minutes, or the straight-line travel time between the two job places at `AVG_SPEED_KMH`, whichever is larger; `BOOKING_DEFAULT_TRAVEL_MIN` (30) when a place has no coordinates | FR-SCHEDULING |
+| BR-16 | **Where availability is checked:** lead accept, quote send (`SCHEDULE_CONFLICT` to the worker), customer quote acceptance and direct-booking creation (`WORKER_UNAVAILABLE` to the customer), direct accept. Only the last check, inside the confirming transaction under a per-worker lock, is authoritative; the earlier ones are early warnings | FR-SCHEDULING |
+| BR-17 | **Database backstop.** Overlapping active windows for one worker and a second in-progress job for one worker are rejected by PostgreSQL itself, whatever the application does | FR-SCHEDULING |
+| BR-18 | **Pipeline states** (each its own record and event): lead delivered (`worker_leads.delivered_at`, `lead.new`) → lead accepted / declined (`worker_leads.response`) → quote submitted (`offers` PENDING, `offer.new`) → quote accepted by the customer (`offers.accepted_at`, `offer.accepted`) → booking confirmed (`jobs.booking_confirmed_at`, `booking.confirmed`). Sending a quote counts as accepting the lead. Customer acceptance and booking confirmation commit in one transaction; if confirmation fails nothing changes | FR-SCHEDULING |
+| BR-19 | **Which place and time judge a job.** A job starting within `NEAR_TERM` (2 h) is matched against the worker's live location (fresh GPS fix < 30 min, else base area) and `radiusKm`. A job starting later is matched against the worker's **base area** (their live position says nothing about where they will be) and `scheduledRadiusKm`, plus the travel gap to their neighbouring bookings | FR-SCHEDULING |
+| BR-20 | `scheduledRadiusKm` (3, 6, 12, 25 or 50; never below `radiusKm`; empty = same as `radiusKm`) is the worker's statement that they will travel farther for future work. It never widens matching of near-term jobs | FR-SCHEDULING |
+| BR-21 | When an assigned job ends or is cancelled the worker receives `location.refresh`. A location fix that moved ≥ 0.5 km (or follows a stale one) re-runs matching for open leads the worker has not been sent yet | FR-SCHEDULING |
+| BR-22 | **No duplicate leads.** A lead is pushed to a worker only if its `(job, worker)` delivery row is newly inserted; declined leads are hidden from the feed and not pushed again | FR-SCHEDULING |
 
 ## 7. Job state machine
 
@@ -159,7 +184,7 @@ Activity tabs: **Ongoing** = OPEN…WORK_COMPLETED · **Completed** = COMPLETED 
 |---|---|
 | A-1 | Launch scale ≤ ~50k users / ~2k concurrent; single region |
 | A-2 | Money = whole INR integers; no paise, no tax |
-| A-3 | S3-compatible object storage with presigned uploads (public-via-signed-URL bucket + private bucket for Aadhaar) |
+| A-3 | S3-compatible object storage with presigned uploads (separate private bucket for Aadhaar). **Built**: S3 provider for production plus a signed local-disk stand-in for development |
 | A-4 | ~~Polling~~ **Superseded by decision D-6:** Socket.IO real-time push; REST `GET` endpoints remain the source of truth and the reconnect catch-up path |
 | A-5 | Distance = haversine on GPS, falling back to area centroid; no PostGIS |
 | A-6 | Aadhaar **number not stored**; front/back images only |
@@ -169,6 +194,12 @@ Activity tabs: **Ongoing** = OPEN…WORK_COMPLETED · **Completed** = COMPLETED 
 | A-10 | Modular monolith, single Postgres; Redis **optional** (D-6) |
 | A-11 | ETA = distance ÷ 20 km/h (no routing provider) |
 | A-12 | Voice note ≤ 30 s, ≤ 5 photos per job, images ≤ 5 MB |
+| A-13 | A job lasts the customer's `durationMin` (15–480) if sent, else the service's default (`service_categories.default_duration_min`, empty for all services today), else `BOOKING_DEFAULT_DURATION_MIN` (90) — decision D-14 |
+| A-14 | `AFTERNOON` without an exact time starts at 14:00 IST today (or 30 min from now if that is later); `TOMORROW` at 10:00 IST tomorrow. "Day" always means `Asia/Kolkata` |
+| A-15 | A scheduled job needs `scheduledFor` ≥ 30 min ahead and ≤ 30 days ahead; it stays open for quotes until `min(scheduledFor, 72 h)` |
+| A-16 | A scheduled job is quoted at the requested time; the worker does not counter-propose another time. For scheduled jobs `etaMinutes` is only a travel-time hint |
+| A-17 | Customer acceptance books the worker at once (no second "worker confirms" step; decision D-11). If the worker's schedule changed since they quoted, acceptance fails with `409 WORKER_UNAVAILABLE` and the quote stays visible as `available:false` |
+| A-18 | Travel gaps use straight-line distance and `AVG_SPEED_KMH` (A-11); no routing provider |
 
 ## 11. Decisions
 
@@ -182,7 +213,14 @@ Activity tabs: **Ongoing** = OPEN…WORK_COMPLETED · **Completed** = COMPLETED 
 | **D-4 (Q-7)** | Worker verification: **manual admin review for production**; **simulated auto-approve in dev**; a manual flag stays on until legal sign-off | Config `WORKER_VERIFICATION_MODE=auto\|manual`. Boot **fails** if `auto` with `NODE_ENV=production`. `auto` approves on save only when both Aadhaar images are uploaded |
 | **D-5 (Q-9)** | "Total saved" is benchmarked against a competitor commission, **configurable, default 20 %**. KaamConnect itself charges 0 % | `COMMISSION_BENCHMARK_RATE=0.20`; savings = Σ paid job totals × rate. The API labels it `benchmarkRate` so the app can disclose the basis |
 | **D-6 (your "Q-14")** | **Socket.IO WebSockets in v1** for bids, lead broadcast and job tracking (no polling). **Redis optional**: v1 stores OTPs/sessions in Postgres; code is structured so Redis can be plugged in for caching and Socket.IO scaling on AWS | New `realtime` module (see `04-architecture.md §3` and `03-api-spec.md §6`). Redis seams: `RealtimePublisher`, `CacheService`, throttler storage, Socket.IO adapter, all behind interfaces with in-memory defaults |
-| **D-7 (Q-13)** | `git init` as a **separate repo** | Done: `KaamConnectBackendAPI/.git` created (branch `main`, no commits yet) |
+| **D-7 (Q-13)** | `git init` as a **separate repo** | Done: `KaamConnectBackendAPI/.git` exists on branch `main` (two docs-only commits so far; remote `origin` configured) |
+| **D-8 (Q-19)** | Changing the **name** of a VERIFIED worker sends the profile back to `PENDING` (option B), in both verification modes. Compare the **normalised** name (trim, collapse spaces, case-insensitive) with the stored one, so `PUT /workers/me` re-sending an unchanged name never triggers a review | **Decided 2026-10-10, not built yet** (small change in `workers.service.ts` `upsert`/`patch`, plus tests and the `03-api-spec.md §8` verification rules). In `auto` mode the existing `autoApproveIfEligible` re-approves at once, so dev behaves like production. **Phase 5 constraint:** routes that act on an already-assigned job (arrival, bill, completion, payment, SOS, tracking pings) must be gated on **ownership of that job**, not on `VERIFIED`, so a re-review hides a worker from new work but never strands a customer mid-job. **Extended by Q-22 (2026-10-10):** replacing the profile photo (`photoKey` set to a different key) on a VERIFIED worker also sends the profile back to `PENDING`. Re-sending the same `photoKey` changes nothing. Removing the photo (`null`) does not trigger review, since there is no face left to impersonate (my default; say if you want it to trigger too). The admin review queue already shows `photoUrl`, so the reviewer sees the new photo |
+| **D-9 (Q-20)** | Aadhaar images are deleted a fixed number of days after the VERIFIED/REJECTED decision: `AADHAAR_RETENTION_DAYS`, **default 7**, configurable (counsel may move it between 0 and 30). Reviewer id and decision time stay as the audit trail. Legal sign-off on collecting Aadhaar images at all is still required before launch | **Decided 2026-10-10, not built (Phase 7).** Scheduled sweep deletes the object from the private bucket first, then the `worker_documents` row, logging the deletion without the key. Also delete on account deletion (Q-17). Add an S3 lifecycle rule on the private bucket as a hard cap, versioning off. REJECTED has no decision timestamp today (only `verifiedAt`), so the job needs a small migration (`reviewed_at`) or an agreed fallback: **ask before migrating**. After deletion `documents.*` is `false` in the worker view, so a later re-review (D-8 or a replaced image) requires a re-upload; the app needs "re-upload required" copy (G-15). Note that the image contains the Aadhaar number even though the database never stores it (A-6) |
+| **D-10 (Q-21)** | AWS region for S3 and RDS: **`ap-south-1` (Mumbai)**. Hyderabad (`ap-south-2`) is the intended later home for cross-region backups, keeping data in India | **Decided 2026-10-10.** No code change: it is the `STORAGE_REGION` env var (unit tests already use `ap-south-1`). Choose before the first real bucket is created: moving later means copying buckets and snapshots and recreating KMS keys. Needed for the first real S3 test (K-3) and Phase 7 deployment |
+| **D-11 (Q-23)** | **Approved 2026-10-11.** Accepting a customer's quote confirms the booking immediately; there is no second worker-confirmation step | **Built** (A-17, BR-18). If the worker's schedule changed since they quoted, acceptance fails with `409 WORKER_UNAVAILABLE` and nothing changes |
+| **D-12 (Q-24)** | **Approved 2026-10-11.** Quotes and bookings that conflict with the worker's confirmed schedule are rejected | **Built** (BR-16): lead accept, quote send and revise, direct accept → `409 SCHEDULE_CONFLICT`; customer accept and direct-booking creation → `409 WORKER_UNAVAILABLE`; backed by database constraints (BR-17) |
+| **D-13 (Q-25)** | **Approved 2026-10-11.** The wider future-work radius is opt-in; workers who do not enable it keep their normal matching radius | **Built** (BR-20): `scheduledRadiusKm`, empty = same as `radiusKm`; never applied to work needed within 2 hours |
+| **D-14 (Q-26)** | **Approved 2026-10-11.** 90 minutes is the default job duration, and a service that needs a different duration can be configured | **Built**: a job's length is the customer's `durationMin` if sent, else the service's `default_duration_min`, else `BOOKING_DEFAULT_DURATION_MIN` (90). **No service has a number yet** (the column is empty for all 8), so every job is 90 minutes until you supply the values; set them in `prisma/data/service-categories.ts` (`defaultDurationMin`) and re-run the seed, or update the column directly. The API does not yet show the service default to the app |
 
 #### Direct booking flow (D-3)
 1. `POST /jobs/direct-booking { workerId, …job fields }` → job `status=OPEN`, `targetWorkerId=workerId`, `expiresAt = now + DIRECT_ACCEPT_TTL_MIN`. Visible **only** to that worker (excluded from every other worker's lead feed; quotes on it are rejected with `409`).
@@ -196,14 +234,23 @@ Frontend impact: Home "Book Pro" must land on a "waiting for worker" state inste
 | ID | Question | Default applied |
 |---|---|---|
 | **Q-4** | Lead `budget` / urgency "Within 1 Hour" are not collected by Post Job — drop, derive, or add fields? | Derive from category base fee; drop "Within 1 Hour" |
-| **Q-5** | Worker cancels after assignment: re-open job to other workers? | Yes, re-open and notify customer |
+| **Q-5** | Worker cancels after assignment: re-open job to other workers? | Yes, re-open and notify customer. **Built in Phase 5 on this default** (2026-10-11; you asked for the documented requirements, it was not confirmed separately). A direct booking is cancelled instead |
 | **Q-6** | Add a default visiting-fee field to worker onboarding (cards show a fee)? | Yes, optional |
 | **Q-8** | Tips: record-only (paid off-platform)? | Record-only |
-| **Q-10** | SOS: who receives it, and add an emergency-contact field? | Email/webhook to a named owner (you); contact field later |
-| **Q-11** | Sector list: the two app lists (12 areas) or the larger legacy list (19)? | 12 now, rest behind a flag |
+| **Q-10** | SOS: who receives it, and add an emergency-contact field? | A webhook to a person or channel you name (`SOS_WEBHOOK_URL`). **Built in Phase 5 on this default**; required (https) in production. The emergency-contact field is still not collected |
+| **Q-11** | Sector list: the two app lists (13 areas) or the larger legacy list (19)? | 13 now (built), the other 6 behind `SEED_LEGACY_AREAS` |
+| **Q-18** | Area centroid coordinates (`lat`/`lng`) for the 13 areas: who supplies verified values? Needed before Phase 4 distance/radius matching | You or a geocoding source; seed fills them without overwriting |
+| ~~Q-19~~ | Answered: see **D-8** (re-review on a normalised name change) | |
+| ~~Q-20~~ | Answered: see **D-9** (delete 7 days after the decision, configurable) | |
+| ~~Q-21~~ | Answered: see **D-10** (`ap-south-1` Mumbai) | |
+| ~~Q-22~~ | Answered 2026-10-10: **yes**, a changed profile photo on a VERIFIED worker also sends the profile back to review. Folded into **D-8** | |
+| ~~Q-23~~ | Answered 2026-10-11: **D-11** (accepting a quote books immediately) | |
+| ~~Q-24~~ | Answered 2026-10-11: **D-12** (conflicting quotes and bookings are rejected) | |
+| ~~Q-25~~ | Answered 2026-10-11: **D-13** (wider radius is opt-in) | |
+| ~~Q-26~~ | Answered 2026-10-11: **D-14** (90 min default, configurable per service). **Open follow-up:** the actual per-service minutes, which only you can supply | Until then every service uses 90 |
 | **Q-12** | Enforce Indian mobile prefix `[6-9]` on the server? | Yes |
 | **Q-14** | Prisma **7.10.0** (stable) rather than Prisma 8 RC? | Yes, revisit after 8 GA |
-| **Q-15** | Hosting / object storage provider? You mentioned AWS for production | S3 + RDS PostgreSQL assumed; decide before Phase 3 |
+| **Q-15** | Hosting / object storage provider? You mentioned AWS for production | S3 + RDS PostgreSQL. **S3 provider is built and unit-tested offline; it has not run against a real bucket yet** (needs your AWS account) |
 | **Q-16** | Workers' phone shown to any logged-in customer on cards ("Call Directly")? | Yes, rate-limited |
 | **Q-17** | Add account deletion (`DELETE /me`), generally required by app stores/privacy law? | Yes, Phase 7 |
 
@@ -214,3 +261,7 @@ Frontend impact: Home "Book Pro" must land on a "waiting for worker" state inste
 | G-14 | "Book Pro" currently opens tracking immediately (D-3): needs a waiting/accepted/declined state; workers need an incoming direct-request screen |
 | G-15 | After saving, the worker modal says "Your profile is verified… now live" (D-4): in `manual` mode the copy must say "under review" and the app must handle `verificationStatus` |
 | G-16 | The app has no socket client (`socket.io-client`) or token refresh; both required for D-6 |
+| G-17 | The API requires a customer address **line** (3–200 chars). The onboarding screen pre-fills one but never validates it, so the app must not send an empty value |
+| G-18 | The photo and Aadhaar "Upload" buttons are visual mocks. The real flow is presign → PUT to the signed URL → send the key; worker onboarding "Save" becomes `PUT /workers/me` followed by two document calls |
+| G-20 | Scheduling needs the app to: send `scheduledFor` (with an offset) and optionally `durationMin`; show `leadState`, `availability` (including *why* a busy worker cannot quote and `nextFreeAt`) and `extendedReach` on lead cards; add Accept / Decline lead buttons; grey out quotes with `available:false`; handle `409 WORKER_UNAVAILABLE` / `SCHEDULE_CONFLICT`; answer `location.refresh` with a location update; add a worker calendar screen (`GET /workers/me/schedule`); collect `scheduledRadiusKm` in worker onboarding (`03-api-spec.md §10.9`) |
+| G-19 | Phase 4 changes what the app should send and show: `timing` is `IMMEDIATE` / `AFTERNOON` / `TOMORROW` (the app's "Immediate (Within 30 mins)" text is a label for `IMMEDIATE`); lead cards get `baseVisitFee` instead of the mock "budget"; quote ETA must be 15, 30 or 45; the Compare Offers and Leads screens need Socket.IO (`03-api-spec.md §9.6`) or they will not update live |
