@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: kc
+          POSTGRES_PASSWORD: kc
+          POSTGRES_DB: KaamConnect
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kc -d KaamConnect"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Throwaway service container, never a real database.
+      DATABASE_URL: postgresql://kc:kc@localhost:5432/KaamConnect?schema=public
+      TEST_DATABASE_URL: postgresql://kc:kc@localhost:5432/KaamConnect_test?schema=public
+      # Throwaway CI-only secrets (the service container and everything here is discarded).
+      JWT_ACCESS_SECRET: ci-only-jwt-secret-0123456789abcdef0123456789abcdef
+      OTP_PEPPER: ci-only-otp-pepper-0123456789abcdef0123456789abcdef
+      # The smoke test onboards a worker and needs the development shortcut so it verifies itself.
+      WORKER_VERIFICATION_MODE: auto
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # .npmrc sets legacy-peer-deps (npm 11 crashes on vitest 4's optional peers).
+      # postinstall runs `prisma generate`.
+      - run: npm ci
+
+      - name: Create the test database
+        run: PGPASSWORD=kc psql -h localhost -U kc -d KaamConnect -c 'CREATE DATABASE "KaamConnect_test"'
+
+      # The scheduling migration creates the btree_gist extension (it backs the "no overlapping bookings for
+      # one worker" constraint). The official postgres image ships it, and POSTGRES_USER is a superuser, so
+      # nothing needs installing. This step proves it up front, so a different image or a restricted user
+      # fails here with a clear message instead of halfway through a migration.
+      - name: Check PostgreSQL can provide btree_gist
+        run: |
+          export PGPASSWORD=kc
+          available=$(psql -h localhost -U kc -d KaamConnect -tAc "SELECT count(*) FROM pg_available_extensions WHERE name = 'btree_gist'")
+          superuser=$(psql -h localhost -U kc -d KaamConnect -tAc "SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+          echo "btree_gist available: $available | migrating user is superuser: $superuser"
+          if [ "$available" != "1" ]; then
+            echo "::error::btree_gist is not available in this PostgreSQL image. Use the official postgres image, or install the contrib package."
+            exit 1
+          fi
+          if [ "$superuser" != "t" ]; then
+            echo "::error::The migrating database user cannot create extensions. btree_gist is a trusted extension, so the database owner may create it; make sure kc owns the databases."
+            exit 1
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # globalSetup applies migrations to the *_test database before the suites run.
+      - name: E2E tests (real PostgreSQL)
+        run: npm run test:e2e
+
+      - name: Build
+        run: npm run build
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Apply migrations to a fresh database
+        run: npm run db:migrate
+
+      # Fails if schema.prisma and the migration history have diverged (forgotten `migrate dev`).
+      - name: Migration drift check
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+
+      - name: Seed reference data
+        run: npm run db:seed
+
+      - name: Smoke test the built app (real login with the console OTP sender)
+        run: bash scripts/smoke.sh
