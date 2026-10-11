@@ -20,41 +20,63 @@ Realistic range assumes answers to the open questions arrive in week 1. Add ~20 
 ---
 
 ## Phase 0 — Decisions, repo, tooling (2–3 d)
-**Files:** `package.json`, `tsconfig*.json`, `nest-cli.json`, `eslint/prettier`, `.env.example`, `.gitignore`, `prisma.config.ts`, `src/main.ts`, `app.module.ts`, `config/*`, `prisma/prisma.service.ts`, `health/*`, `.github/workflows/ci.yml`, README.
+**Files:** `package.json`, `tsconfig*.json`, `nest-cli.json`, `oxlint` + `prettier`, `.env.example`, `.gitignore`, `prisma.config.ts`, `src/main.ts`, `app.module.ts`, `config/*`, `prisma/prisma.service.ts`, `health/*`, `.github/workflows/ci.yml`, README.
 **Work:** git repo already initialised (D-7); scaffold Nest 12; pin Prisma 7.10 (Q-14) and confirm it works against local PostgreSQL 18 (D-1); connect to the existing `KaamConnect` / `KaamConnect_test` databases (ask before creating anything); env validation incl. production guards for dev-only switches; global pipes/filters/guards skeleton; health endpoints; CI.
 **Acceptance:** `npm run start:dev` boots, `/health/ready` is green with DB up and red with DB down; CI passes on an empty test; boot fails with a clear message for missing/invalid env.
 **Risks:** Nest 12 / Prisma 7 adapter ESM-vs-CJS friction → mitigate by doing a throwaway spike first hour.
 
 ## Phase 1 — Schema, reference data, catalog (3 d)
-**Files:** `prisma/schema.prisma` (from `docs/proposed-schema.prisma`), baseline migration + hand-written SQL constraints, `prisma/seed.ts`, `prisma/data/*`, `modules/catalog/*`.
+**Files:** `prisma/schema.prisma` (from `prisma/schema.prisma`), baseline migration + hand-written SQL constraints, `prisma/seed.ts`, `prisma/data/*`, `modules/catalog/*`.
 **Endpoints:** `GET /locations`, `GET /service-categories`.
-**Acceptance:** fresh DB → migrate → seed produces 8 categories, 3 cities, ≥ 12 areas; seed re-run is a no-op; drift check empty; constraint tests (radius 5 rejected, two primary addresses rejected) pass.
+**Acceptance:** fresh DB → migrate → seed produces 8 categories, 3 cities, 13 areas; seed re-run is a no-op; drift check empty; constraint tests (radius 5 rejected, two primary addresses rejected) pass.
 **Risks:** area centroid coordinates unavailable → temporarily null (distance falls back to "same area").
 
 ## Phase 2 — Auth & account (4–5 d)
 **Files:** `modules/auth/*` (otp, token, sender interface + console sender + provider impl), `modules/users/*`, `common/guards|decorators`, throttler config.
 **Endpoints:** `/auth/otp/request`, `/auth/otp/verify`, `/auth/refresh`, `/auth/logout`, `GET/PATCH /me`.
 **Acceptance:** golden path in e2e; lockout after 5 wrong codes; cooldown enforced; refresh rotation + reuse revocation; no OTP/tokens in logs; dev bypass impossible in production config.
-**Work note (D-2):** `OtpSender` interface with the console sender only; `channel=WHATSAPP` returns `501`. **Risks:** MSG91 integration waits on DLT registration (days–weeks) — start it in parallel; nothing in Phases 0–7 is blocked by it.
+**Work note (D-2):** `OtpSender` interface with the console sender only; `channel=WHATSAPP` returns `501`. **Delivered:** see `03-api-spec.md §7` and `05-security-testing.md §5`. `GET /me/savings` stays in Phase 6 as planned. **Risks:** MSG91 integration waits on DLT registration (days–weeks) — start it in parallel; nothing in Phases 0–7 is blocked by it.
 
 ## Phase 3 — Profiles, media, verification (5–6 d)
 **Files:** `modules/customers`, `modules/workers` (profile, documents, location), `modules/media` (+ S3 impl), `modules/admin` (verify/reject), seed-demo (partial).
 **Endpoints:** `PUT/GET/PATCH /customers/me`, addresses CRUD, `PUT/GET/PATCH /workers/me`, `PUT /workers/me/documents/:type`, `PUT /workers/me/location`, `POST /media/presign`, `GET /admin/workers`, `POST /admin/workers/:id/(verify|reject)`.
 **Acceptance:** onboarding payloads from both screens round-trip; 3 trades / radius 5 / 0 languages rejected; key-prefix forgery rejected; Aadhaar keys never appear in non-admin responses; unverified workers excluded from later discovery.
-**Work note (D-4):** `WORKER_VERIFICATION_MODE=auto` (dev: approve on save when both Aadhaar images exist) vs `manual` (production: admin endpoints). Tests cover both modes and the production boot guard. **Risks:** Aadhaar compliance/legal review could change the document flow; object-storage account setup.
+**Delivered:** see `03-api-spec.md §8` and `05-security-testing.md §6`. Not in this phase by design: discovery (`GET /workers`, Phase 4) and the Socket.IO `location:update` event (Phase 5); the REST location endpoint is built. **Work note (D-4):** `WORKER_VERIFICATION_MODE=auto` (dev: approve on save when both Aadhaar images exist) vs `manual` (production: admin endpoints). Tests cover both modes and the production boot guard. **Risks:** Aadhaar compliance/legal review could change the document flow; object-storage account setup.
 
-## Phase 4 — Jobs, leads, offers (6–8 d)
+## Phase 4 — Jobs, leads, offers, direct booking, real-time (8–11 d)
 **Files:** `modules/jobs` (create/list/get/cancel, state machine, expiry sweeper), `modules/offers` (leads feed, send/revise/withdraw, accept), `workers` discovery (`GET /workers`), `common/utils/geo.ts`, cursor util.
 **Also:** `modules/realtime` (Socket.IO gateway, handshake JWT auth, rooms, `RealtimePublisher`), events `lead.new/lead.closed/direct.request/direct.declined/direct.expired/offer.*/job.status`; direct-booking flow (D-3) with `DIRECT_ACCEPT_TTL_MIN` expiry.
 **Endpoints:** `POST /jobs`, `POST /jobs/direct-booking`, `POST /jobs/:id/direct/(accept|decline)`, `GET /customers/me/jobs`, `GET /jobs/:id`, `GET /jobs/:id/offers`, `POST /jobs/:id/offers/:offerId/accept`, `POST /jobs/:id/cancel`, `GET /leads`, `GET /leads/:id`, `POST /leads/:id/offers`, `GET /workers`, `GET /workers/:id`.
 **Acceptance:** (realtime) socket with forged/expired JWT refused; `lead.new` reaches only matching verified workers and never a direct job; `offer.new` reaches only the job's customer; direct request: target accepts → ASSIGNED, decline/expiry → CANCELLED and customer notified, other workers never see it; worker sees only matching-trade, in-radius, OPEN leads; address never in lead payload; duplicate quote → 409; concurrent accepts → exactly one winner; expired jobs become CANCELLED; all state-machine rows covered by tests; discovery p95 < 300 ms on seeded 5k workers.
-**Risks:** distance/radius semantics without GPS (area-centroid fallback); lead-feed query cost → verified by `EXPLAIN` against the proposed index.
+**Delivered:** see `03-api-spec.md §9`, `04-architecture.md §8` and `05-security-testing.md §7` (includes the benchmark: discovery p95 94 ms, lead feed p95 22 ms, lead query uses an index). Deliberately not in this phase: `Idempotency-Key`, free-text search `q`, `GET /workers/me/jobs` (Phase 5). **Risks:** distance/radius semantics without GPS (area-centroid fallback); lead-feed query cost → verified by `EXPLAIN` against the proposed index.
 
-## Phase 5 — Fulfilment (6–7 d)
-**Files:** `jobs` (tracking, arrival, bill, payment, receipt), `modules/safety`, `workers/location`.
-**Endpoints:** `GET /jobs/:id/tracking`, `POST /jobs/:id/arrival`, `PUT /jobs/:id/bill-items`, `POST /jobs/:id/work-photos`, `POST /jobs/:id/bill/approve`, `POST /jobs/:id/complete-work`, `GET /jobs/:id/bill`, `POST /jobs/:id/payment`, `GET /jobs/:id/receipt`, `POST /jobs/:id/sos`, `GET /workers/me/jobs`.
-**Acceptance:** full lifecycle in e2e; arrival lockout after 5 tries; payment total always equals Σ items and platformFee is 0; double-pay is idempotent; stale GPS (> 2 min) flagged in tracking payload; SOS persists and notifies configured channel.
-**Also:** `job.location` / `bill.updated` events, `location:update` socket event (throttled). **Risks:** ETA quality without a routing provider (straight-line × speed) — acceptable for v1, flagged to product; payment honesty (customer self-reports) → optional worker-confirm path exists.
+## Scheduling and availability (inserted between Phase 4 and Phase 5; requested 2026-10-10)
+**Why here:** Phase 5 starts and finishes work; a worker must be able to hold a job in progress and future bookings without double-booking before those endpoints exist.
+**Delivered:** see `01-requirements.md` (FR-SCHEDULING, BR-13 to BR-22), `03-api-spec.md §10`, `04-architecture.md §9`, `05-security-testing.md §8`. Migration `20261010180000_scheduling_and_availability` (new `worker_leads` table, booking columns, exclusion constraint, one-in-progress index).
+**Carried into Phase 5 and now built** (each item is a real test in `test/phase5-requirements.e2e-spec.ts`, which began as 22 pending `todo` entries and has none left):
+1. **Endpoints:** `POST /jobs/:id/arrival`, `PUT /jobs/:id/bill-items`, `GET /jobs/:id/bill`, `POST /jobs/:id/bill/approve`, `POST /jobs/:id/complete-work`, `POST /jobs/:id/payment`, `GET /jobs/:id/receipt`, `GET /jobs/:id/tracking`, `POST /jobs/:id/sos`, `GET /workers/me/jobs`, and the worker's back-out through `POST /jobs/:id/cancel`. **Built.**
+2. **Ownership, not verification** (decision D-8): worker routes use `@RequireProfile('worker')` without `verified` and every query states `workerId = caller`. **Built**, tested for PENDING and REJECTED workers, strangers and a person holding both profiles.
+3. **`workerFreed`** (`location.refresh`) at `WORK_COMPLETED`, on back-out and on a customer cancelling an assigned job; not again at payment. **Built.**
+4. **Back-out clears the booking**: status OPEN, worker, accepted quote, assignment time, arrival code and attempts, booking window and confirmation cleared, visit-fee line removed, quote WITHDRAWN (with `accepted_at` kept so a second quote is refused as `BACKED_OUT`), fresh deadline; a direct booking becomes CANCELLED. **Built.**
+5. **Re-opened leads are re-sent**: the once-only guard is reset for everyone except workers who declined and the one who backed out, so `lead.new` goes out again exactly once per re-open; the customer gets `job.reopened`. **Built**, with a regression test that fails if the reset is removed (checked by deliberately removing it).
+6. **One job on site at a time**: friendly `409 WORKER_BUSY` plus the database index, both tested, including two simultaneous arrivals. **Built.**
+
+## Phase 5 — Fulfilment (6–7 d) — **DONE 2026-10-11, with two checks outstanding**
+**Files:** `modules/fulfilment` (arrival, bill, completion, payment and receipt, tracking, worker's job list), `modules/safety` (SOS), `jobs/worker-backout.service.ts`, `jobs/open-until.ts`, the `location:update` handler in `realtime/realtime.gateway.ts`. No migration.
+**Endpoints:** `GET /jobs/:id/tracking`, `POST /jobs/:id/arrival`, `PUT /jobs/:id/bill-items`, `POST /jobs/:id/work-photos`, `POST /jobs/:id/bill/approve`, `POST /jobs/:id/complete-work`, `GET /jobs/:id/bill`, `POST /jobs/:id/payment`, `GET /jobs/:id/receipt`, `POST /jobs/:id/sos`, `GET /workers/me/jobs`, `PATCH /admin/service-categories/:id/duration` (decision D-14). Contract: `03-api-spec.md §11`.
+**Acceptance, and how each was checked:**
+| Criterion | Status |
+|---|---|
+| Full lifecycle in e2e | **Met**: assigned -> arrived -> billed -> approved -> done -> paid -> receipt, in the e2e suite and in the built-app smoke test |
+| Arrival lockout after 5 tries | **Met**, including 10 parallel guesses |
+| Payment total equals the sum of items and `platformFee` is 0 | **Met** (amount is never accepted from the app) |
+| Double-pay is idempotent | **Met**, including 10 simultaneous taps |
+| Stale GPS (> 2 min) flagged in tracking | **Met**; a fix older than 30 min also loses its distance |
+| SOS persists and notifies the configured channel | **Met against a recording notifier and a mocked webhook client**; **not** tried against a real receiver |
+| Distances only from real coordinates | **Met**: `null` plus `distanceBasis` when the job or area has none (K-26) |
+**Not verified:** GitHub CI (never run; a `btree_gist` check step was added, only its script was tested locally) and the idle-machine benchmark (pending by instruction).
+**Not built (documented):** worker payment confirmation, admin SOS acknowledge and `sos.acknowledged`, PDF receipts, retry for the SOS webhook. See `progress.md` §3.2 and K-27 to K-31.
+**Also built:** `job.location`, `bill.updated`, `job.reopened` events and the `location:update` socket event (throttled to one stored fix per 3 s). **Risks that remain:** ETA quality without a routing provider (straight line x speed); payment honesty (customer self-reports).
 
 ## Phase 6 — Reviews, activity, earnings, savings (3–4 d)
 **Endpoints:** `POST /jobs/:id/review`, `GET /me/savings`, `GET /workers/me/earnings`, worker activity list, `GET /workers/:id` review summary.

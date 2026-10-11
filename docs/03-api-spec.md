@@ -43,6 +43,8 @@ The "Audio code help" button reads the code aloud on-device; no endpoint.
 
 ### 2.3 Reference data (Customer onboarding chips, Home, Leads directory) — P1
 
+> Built in Phase 1. Public until Phase 2 adds the global JWT guard, after which they require login. Response `Cache-Control: private, max-age=300` + ETag.
+
 | Method & path | Response |
 |---|---|
 | `GET /locations` | `[{ id, name: "Chandigarh", areas: [{ id, name: "Sector 22" }] }]` — cacheable, `ETag` |
@@ -246,3 +248,368 @@ Rules
 - Every inbound event is rate-limited per socket (e.g. 20/s) and payload-validated with the same DTO validators as REST.
 - Heartbeats: Socket.IO ping/pong; app should also reconnect and refetch when returning to foreground.
 - Scaling: with one instance nothing else is needed. With several instances (AWS) enable the Redis adapter (`REDIS_URL`) and **either** sticky sessions on the load balancer **or** force the `websocket` transport only.
+
+## 7. Authentication contract (built in Phase 2)
+
+Everything is under `/api/v1` and **requires `Authorization: Bearer <accessToken>` unless marked public**. Public: `GET /health*`, `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/refresh`. Phone numbers may be sent as `98765 43210`, `9876543210` or `+919876543210`; the server stores E.164 and accepts Indian mobiles only (`[6-9]` + 9 digits).
+
+| Endpoint | Success | Notes |
+|---|---|---|
+| `POST /auth/otp/request` `{phone, channel?}` | `202 {resendAfterSec: 30, expiresInSec: 300}` | Identical answer whether or not the number has an account. A new code replaces the previous one |
+| `POST /auth/otp/verify` `{phone, code}` | `200 {accessToken, refreshToken, expiresIn: 900, isNewUser, user:{id, phone, language, hasCustomerProfile, hasWorkerProfile}}` | `isNewUser` is true only for the call that created the account. Use the two `has…Profile` flags to decide whether onboarding is needed |
+| `POST /auth/refresh` `{refreshToken}` | `200 {accessToken, refreshToken, expiresIn}` | **Rotates**: the old refresh token is spent; store the new one |
+| `POST /auth/logout` `{refreshToken}` | `204` | Auth required. Ends that login (all its tokens). Idempotent |
+| `GET /me` | `200 {id, phone, language, customer, worker}` | `customer`/`worker` are `null` until Phase 3 creates profiles |
+| `PATCH /me` `{language}` | `200` same as `GET /me` | Only `en`, `hi`, `pa`. Any other field → `422` |
+
+### Error codes the app should handle
+
+| Status | `code` | Meaning / app behaviour |
+|---|---|---|
+| 401 | `UNAUTHENTICATED` | No/invalid token → go to login |
+| 401 | `TOKEN_EXPIRED` | Access token expired → call `/auth/refresh`, retry once |
+| 401 | `OTP_INVALID` | Wrong, expired, unknown or already-used code (deliberately indistinguishable) |
+| 401 | `REFRESH_INVALID` | Unknown or expired refresh token → login |
+| 401 | `REFRESH_REUSED` | Refresh token already used or its login was ended (logout / suspected theft) → login |
+| 403 | `ACCOUNT_DISABLED` | Account switched off |
+| 422 | `VALIDATION_FAILED` | `details: [{field, issue}]` |
+| 429 | `OTP_COOLDOWN` | Resend too soon; `retryAfterSec` + `Retry-After` header |
+| 429 | `OTP_LIMIT` | 5 codes per phone per hour reached; `retryAfterSec` |
+| 429 | `OTP_LOCKED` | 5 wrong attempts on this code; request a new one |
+| 429 | `TOO_MANY_REQUESTS` | Per-IP rate limit (OTP request 20/h, verify 30/15 min, refresh 60/15 min, default 60/min) |
+| 501 | `CHANNEL_NOT_AVAILABLE` | `channel: "WHATSAPP"` is not built yet |
+| 502 | `OTP_SEND_FAILED` | SMS provider failure; the user may retry immediately |
+
+### Token lifetimes and limits
+- Access token: HS256 JWT, **15 min** (`JWT_ACCESS_TTL_SEC`), claims `sub`, `jti`, `iat`, `exp` only. Not revocable before expiry (logout / disabling takes effect at the next refresh).
+- Refresh token: opaque, **30 days**, one-time use, grouped per login. Replaying a spent token revokes that whole login.
+- OTP: 6 digits, valid 5 min, 5 attempts, resend after 30 s, max 5 per phone per hour (about 25 guesses per hour per phone against 1,000,000 possibilities).
+- Dev only: `OTP_DEV_BYPASS=true` makes every code `123456`; with `SMS_PROVIDER=console` the code is printed in the server log. Both are refused at boot in production.
+
+### What the mobile app must do (frontend prerequisites)
+1. Keep tokens in `expo-secure-store`, never in AsyncStorage.
+2. **Single-flight refresh**: when several requests get `TOKEN_EXPIRED` together, send **one** `/auth/refresh` and let the rest wait for it. Two parallel refreshes with the same token are treated as theft and end the login.
+3. Always store the *new* refresh token returned by `/auth/refresh`.
+4. Behind the AWS load balancer set `TRUST_PROXY=1` so rate limits use the real client IP.
+
+## 8. Profiles, uploads and verification contract (built in Phase 3)
+
+All routes need a login. "Profile" in the last column means the caller must already have that profile (otherwise `403`).
+
+| Method & path | Needs | Body → response |
+|---|---|---|
+| `POST /media/presign` | – | `{purpose, contentType, sizeBytes}` → `200 {uploadUrl, method:"PUT", headers:{…}, key, expiresInSec:300}` |
+| `PUT /customers/me` | – | `{fullName, photoKey?, commLanguage?, allowDirectCalls?, address:{areaId, line, lat?, lng?}}` → customer view. Creates or updates the profile **and its primary address**; omitted options keep their value |
+| `GET /customers/me` | – | customer view, or `404 PROFILE_NOT_FOUND` before onboarding |
+| `PATCH /customers/me` | – | any of `fullName`, `photoKey` (`null` removes), `commLanguage`, `allowDirectCalls` |
+| `GET/POST /customers/me/addresses` | customer | list (primary first) / add (max 5, the first becomes primary) |
+| `PATCH /customers/me/addresses/:id` | customer | `areaId`, `line`, `lat`+`lng` (both numbers to set, both `null` to clear) |
+| `POST /customers/me/addresses/:id/primary` | customer | moves the primary flag |
+| `DELETE /customers/me/addresses/:id` | customer | `204`; deleting the primary promotes the oldest remaining one |
+| `PUT /workers/me` | – | worker onboarding save (fields below) → worker view |
+| `GET /workers/me` · `PATCH /workers/me` | – | worker view / partial update (`null` clears `upiId`, `vehicle`, `visitingFee`, `photoKey`) |
+| `PUT /workers/me/documents/:type` | worker | `type` = `AADHAAR_FRONT` or `AADHAAR_BACK`, body `{key}` → worker view |
+| `PUT /workers/me/location` | **verified** worker | `{lat, lng}` → `200 {accepted}`; a fix less than 3 s after the previous one is acknowledged but dropped (`accepted:false`) |
+| `GET /admin/workers?status=&limit=&cursor=` | admin | `{items, nextCursor}`; default status `PENDING`, oldest first, `limit` 1–50 (default 20) |
+| `POST /admin/workers/:id/verify` | admin | `{badge?}` → `{userId, verificationStatus, badge, rejectionReason}` |
+| `POST /admin/workers/:id/reject` | admin | `{reason}` (1–300 chars) → same shape |
+
+### Upload flow (identical for S3 and the development stand-in)
+1. `POST /media/presign` with the file's `purpose`, `contentType` and exact `sizeBytes`.
+2. `PUT` the bytes to `uploadUrl` with **exactly** the returned `headers` and a `Content-Length` equal to `sizeBytes`. The signature covers type and size, so any difference is refused (`403`).
+3. Send the returned `key` in the profile / document call. The server only accepts keys that this user generated for this purpose **and** that really exist in storage (`422` otherwise).
+4. Files are read back through short-lived signed links (`photoUrl`, 10 min). The raw key is never returned.
+
+| Purpose | Types | Max | Bucket |
+|---|---|---|---|
+| `PROFILE_PHOTO`, `JOB_PHOTO`, `WORK_PROOF` | `image/jpeg`, `image/png`, `image/webp` | 5 MB | media |
+| `JOB_VOICE` | `audio/mp4`, `audio/aac`, `audio/mpeg` | 2 MB | media |
+| `AADHAAR` | images as above | 5 MB | **private** (never returned to customers or workers; admin links last 5 min) |
+
+### Worker fields (`PUT /workers/me`)
+`fullName` (1–80), `trades` (1–2 category ids, first = primary), `experienceYears` (1–40), `skills` (≤ 15 chips of ≤ 40 chars; blanks and case-insensitive duplicates are removed), `languages` (≥ 1 of `en|hi|pa`), `baseAreaId`, `radiusKm` (3, 6 or 12), `termsAccepted` (**must be `true`**), optional `photoKey`, `upiId` (`name@bank`), `vehicle` (≤ 80), `visitingFee` (₹1–100,000). `verificationStatus`, `badge`, ratings and ids are **never** accepted from the client (`422`).
+
+### Verification rules
+- A new worker is `PENDING`. **Production (`WORKER_VERIFICATION_MODE=manual`):** only an admin can set `VERIFIED`, and only when both Aadhaar images exist (`409 DOCUMENTS_MISSING`). **Development (`auto`):** becomes `VERIFIED` automatically once both images are uploaded.
+- Editing a `REJECTED` profile, or replacing an Aadhaar image on a `VERIFIED`/`REJECTED` one, sends it back to `PENDING` (in `auto` mode it is re-approved at once).
+- **Decided (D-8), not built yet:** changing `fullName` on a `VERIFIED` worker also sends it back to `PENDING`, but only when the normalised name (trimmed, spaces collapsed, case-insensitive) differs from the stored one. A save that re-sends the same name changes nothing. The same applies to `photoKey` (Q-22): a different key sends it back to `PENDING`, the same key changes nothing, and removing the photo (`null`) does not trigger review.
+- **Decided (D-9), not built yet (Phase 7):** Aadhaar images are deleted `AADHAAR_RETENTION_DAYS` (default 7) after the VERIFIED/REJECTED decision; afterwards `documents.AADHAAR_FRONT/BACK` read `false` and a re-review needs both images uploaded again.
+- Rejecting or re-submitting also takes effect immediately for guarded routes: a worker who loses `VERIFIED` gets `403 NOT_VERIFIED` on the next live-location call.
+- Admin routes answer **404** (not 403) to everyone who is not an active admin. Make someone an admin by hand: `UPDATE users SET is_admin = true WHERE phone = '+91…';`
+
+### New error codes
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 403 | `CUSTOMER_PROFILE_REQUIRED` / `WORKER_PROFILE_REQUIRED` | The route acts as that profile; create it first |
+| 403 | `NOT_VERIFIED` | Worker profile is not `VERIFIED` |
+| 404 | `PROFILE_NOT_FOUND` | `GET`/`PATCH` of a profile that was never created |
+| 409 | `ADDRESS_LIMIT` | More than 5 addresses |
+| 409 | `DOCUMENTS_MISSING` | Admin tried to verify a worker without both images |
+| 422 | `VALIDATION_FAILED` | `details[].field` uses dotted paths, e.g. `address.areaId`; unknown area/category and bad upload keys are reported the same way |
+
+### Development storage stand-in
+With `STORAGE_PROVIDER=local` (default outside production) the signed URLs point at this API (`/api/v1/dev-storage/...`) and files go to `.local-storage/`. These routes are public but protected by an HMAC signature and expiry, answer `404` when S3 is configured, and the app **refuses to start in production** with `local`.
+
+## 9. Marketplace contract: jobs, discovery, leads, quotes, direct booking, push (built in Phase 4)
+
+Everything is under `/api/v1` and needs a login. "Needs" is the profile the caller must hold; a route that acts as a worker also requires `VERIFIED` (otherwise `403 NOT_VERIFIED`).
+
+### 9.1 Routes
+
+| Method & path | Needs | Purpose / notes |
+|---|---|---|
+| `POST /jobs` | customer | Post Job → `201 {id, jobNumber, reference:"KC-10000", status:"OPEN", expiresAt, notifiedWorkers}` |
+| `POST /jobs/direct-booking` | customer | "Book Pro": same body plus `workerId` → `201 {…, awaitingWorker:true}` (no `notifiedWorkers`) |
+| `GET /customers/me/jobs?tab=&limit=&cursor=` | customer | Activity: `tab` = `ongoing` (default) / `completed` / `cancelled`; `{items, nextCursor, meta:{counts:{ongoing,completed,cancelled}}}` |
+| `GET /jobs/:id` | customer, assigned worker, or requested worker | Role-shaped job view (§9.3); anyone else `404` |
+| `POST /jobs/:id/cancel` `{reason?}` | customer (owner) | OPEN or ASSIGNED → CANCELLED; waiting quotes are rejected |
+| `GET /jobs/:id/offers?sort=fee\|eta` | customer (owner) | Compare Offers: live quotes (waiting or accepted) with a worker card each, `isFastest`, and (§10) `available`, `startsAt`, `nextFreeAt` |
+| `POST /jobs/:id/offers/:offerId/accept` | customer (owner) | → `{status:"ASSIGNED", arrivalCode, booking:{startAt,endAt,confirmedAt}, worker}`; `409 WORKER_UNAVAILABLE` if the worker has since taken a clashing booking (§10) |
+| `POST /jobs/:id/direct/accept` · `/direct/decline` | the requested worker | Answers a direct booking → job view |
+| `GET /leads?filter=all\|immediate&categoryId=&limit=&cursor=` | verified worker | Leads Radar (§9.2) |
+| `GET /leads/:id` | verified worker | Full lead: photos, voice note; never the address or a phone |
+| `POST /leads/:id/offers` `{visitFee, etaMinutes, message?}` | verified worker | Send a quote → `201 {id, visitFee, etaMinutes, message, status:"PENDING", createdAt}` |
+| `PATCH /offers/:id` · `DELETE /offers/:id` | verified worker (owner) | Revise (fee, ETA, message) or withdraw (`204`) while the quote is waiting |
+| `GET /workers?categoryId=&areaId=&sort=distance\|rating&limit=&cursor=` | customer | Home "Verified Artisans Near You": `{items:[card], nextCursor}` |
+| `GET /workers/:id` | customer | A verified worker's card plus `languages`, `radiusKm`, `trades` |
+
+`POST /jobs` body: `categoryId`, `title` (1–120), `description?` (≤ 1000), `timing` (`IMMEDIATE` / `AFTERNOON` / `TOMORROW` / `SCHEDULED`; see §10 for `scheduledFor` and `durationMin`), **either** `addressId` (a saved address) **or** `address:{areaId, line, lat?, lng?}`, `photoKeys?` (≤ 5 upload keys, purpose `JOB_PHOTO`), `voiceNote?:{key, durationSec 1–30}` (purpose `JOB_VOICE`). The address text is **copied onto the job**; later edits to the address book do not change it. `status`, `workerId`, `expiresAt`, `jobNumber` and similar are rejected (`422`).
+
+Quote rules: `visitFee` integer ₹1–100,000; `etaMinutes` is one of **15, 30, 45** (the three choices on the screen); `message` ≤ 300. One quote per worker per job; withdrawing and quoting again revives the same row.
+
+### 9.2 Who sees which job (matching)
+
+| Rule | Detail |
+|---|---|
+| A worker is told about / shown a broadcast job when | verified, offers the job's trade, is not the customer, **and serves the place** |
+| "Serves the place" | With coordinates on both sides: the straight-line distance is within the worker's own radius (3, 6 or 12 km); their position is a live GPS fix less than 30 minutes old, else their base area. **Without coordinates** (area centroids are not filled yet, Q-18): the worker's base area is in the **same city**; `distanceKm` is then `null` |
+| Direct bookings | Visible **only** to the requested worker (feed, detail, quotes, job view, pushes); everyone else gets `404` |
+| Order | Newest first |
+| Hidden always | the address line, exact coordinates, the customer's phone, the arrival code |
+| Customer name | shown on lead cards (`customerName`), as on the current screens |
+
+Lead card fields: `id, reference, title, category{id,title{en,hi,pa}}, customerName, areaName, cityName, distanceKm, urgency (timing), postedAt, hasVoiceNote, notes, offersCount, baseVisitFee, isDirect, expiresAt, myOffer`. `baseVisitFee` replaces the old mock `budget`; the "Within 1 Hour" urgency does not exist (decision Q-4).
+
+### 9.3 Job view by viewer
+
+| Field | Customer (owner) | Assigned worker | Requested worker (still OPEN) |
+|---|---|---|---|
+| Title, description, timing, category, photos, voice note | ✔ | ✔ | ✔ |
+| `addressLine`, `lat`, `lng` | ✔ | ✔ (once assigned) | ✘ |
+| `customer {name, phone}` | – | name always; **phone only while in service and only if the customer allows direct calls** | name only |
+| `worker` (full card with phone) | ✔ once assigned | – | – |
+| `arrivalCode` | ✔ while ASSIGNED / ARRIVED | ✘ | ✘ |
+
+### 9.4 Job lifecycle (single source of truth: `jobs/state/job-state-machine.ts`)
+
+`OPEN → ASSIGNED → ARRIVED → IN_PROGRESS → WORK_COMPLETED → COMPLETED`, and `CANCELLED` from `OPEN` or `ASSIGNED` (customer), from `OPEN` by the requested worker (decline) or by the system (expiry). Phase 4 built the transitions out of `OPEN` and the customer cancel; **Phase 5 wired the rest** (arrival, bill approval, completion, payment, worker back-out: a broadcast job re-opens, a direct booking is cancelled; see §11).
+
+| Timer | Value | Result |
+|---|---|---|
+| Broadcast request unanswered | `JOB_OPEN_TTL_HOURS` (24 h) | `CANCELLED`, `cancelledBy=SYSTEM`, `cancelReason=EXPIRED`, waiting quotes rejected |
+| Direct request unanswered | `DIRECT_ACCEPT_TTL_MIN` (10 min) | same |
+
+A sweeper runs every minute (safe on several instances). A request that has expired but not yet been swept can no longer be quoted on or accepted (`409 JOB_NOT_OPEN`).
+
+### 9.5 New error codes
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 403 | `OWN_JOB` | A worker tried to quote on their own request |
+| 404 | `NOT_FOUND` | Not yours / not a lead for you / unknown (deliberately the same answer) |
+| 409 | `JOB_LIMIT` | More than 10 open requests |
+| 409 | `DIRECT_LIMIT` | More than 3 pending direct requests |
+| 409 | `JOB_NOT_OPEN` | Closed, cancelled, expired or already assigned |
+| 409 | `OFFER_EXISTS` | You already quoted on this job |
+| 409 | `OFFER_NOT_PENDING` | Quote was withdrawn, rejected or accepted |
+| 409 | `DIRECT_JOB` | A direct request cannot be quoted on or accepted through quotes |
+| 409 | `INVALID_TRANSITION` | The job's status does not allow that action (e.g. cancelling after the worker arrived) |
+| 422 | `VALIDATION_FAILED` | Includes: `workerId` not available / not serving you / yourself; bad media keys (`photoKeys.0`, `voiceNote.key`); unknown address |
+
+### 9.6 Real-time (Socket.IO) as built
+
+Connect to namespace **`/realtime`** with `auth: { token: <access JWT> }`. Refusals arrive as `connect_error` with message `unauthorized` or `token_expired`. A socket is closed when its token expires, so reconnect with a fresh token. The server puts you in `user:<yourId>` automatically; you can additionally send `job:watch {jobId}` / `job:unwatch` (ack `{ok:true}` or `{ok:false,error:"NOT_FOUND"|"INVALID"|"RATE_LIMITED"}`). Limits: 20 messages per second per connection, frames over 16 KB close the connection. Browser origins must be listed in `REALTIME_CORS_ORIGINS` (native apps need nothing).
+
+| Event | Sent to | Payload |
+|---|---|---|
+| `lead.new` | each covering verified worker | lead summary (no address/phone): `id, title, categoryId, areaName, distanceKm, urgency, postedAt, hasVoiceNote, offersCount, isDirect:false` |
+| `direct.request` | only the requested worker | same, with `isDirect:true` and `expiresAt` |
+| `offer.new` / `offer.updated` | the job's customer | `jobId, offerId, visitFee, etaMinutes, message, status, worker:{id,name,rating,reviewsCount}` |
+| `offer.accepted` | the winning worker | `{jobId, offerId}` |
+| `offer.rejected` | workers whose waiting quote lost | `{jobId, offerId}` |
+| `lead.closed` | covering workers that did not get a more specific message | `{id, reason: ASSIGNED \| CANCELLED \| EXPIRED}` |
+| `job.status` | the customer and the involved worker | `{jobId, status, at}` |
+| `direct.declined` / `direct.expired` | the customer | `{jobId}` |
+
+Differences from the earlier draft in §6: `job.status` goes to the participants' personal rooms only (the `job:<id>` room is reserved for high-frequency `job.location`, Phase 5), so nobody receives it twice; pushes are best effort, so apps must re-fetch the REST resource on (re)connect.
+
+### 9.7 Not built yet in this area
+`Idempotency-Key` on `POST /jobs` (a double tap creates two requests; the 10-open-jobs cap limits the damage), free-text search `q` on `GET /workers`, (`GET /workers/me/jobs`, arrival, bill, tracking and payment were built in Phase 5: see §11.)
+
+## 10. Scheduling and availability contract (built after Phase 4, before Phase 5)
+
+Rules and reasons: `01-requirements.md` (FR-SCHEDULING, BR-13 to BR-22, A-13 to A-18). Everything below is under `/api/v1`.
+
+### 10.1 Routes
+
+| Method & path | Needs | Purpose / notes |
+|---|---|---|
+| `POST /jobs`, `POST /jobs/direct-booking` | customer | Now also accept `timing:"SCHEDULED"`, `scheduledFor`, `durationMin` (§10.2). `201` adds `scheduledFor` (ISO or null) and `durationMin` |
+| `POST /leads/:id/accept` | verified worker | **Lead acceptance**: "this one is mine to quote on". Checks the worker's schedule. `200 {jobId, state:"ACCEPTED", availability}`. Idempotent. A direct request: `409 DIRECT_JOB` |
+| `POST /leads/:id/decline` | verified worker | Hides the lead and stops further pushes about it. `200 {jobId, state:"DECLINED"}`. `409 OFFER_EXISTS` while the worker has a live quote (withdraw it first). A worker may accept again later while the request is open |
+| `POST /leads/:id/offers` | verified worker | Unchanged body. Now also refused with `409 SCHEDULE_CONFLICT` if the worker cannot make the time; counts as accepting the lead |
+| `PATCH /offers/:id` | verified worker | Changing `etaMinutes` re-checks the schedule (`409 SCHEDULE_CONFLICT`) |
+| `GET /leads?filter=all\|immediate\|scheduled` | verified worker | `scheduled` = jobs booked for a time. Declined leads are left out |
+| `GET /workers/me/schedule?from=&to=&limit=` | any worker profile | The calendar: `{inProgress: Booking\|null, upcoming: Booking[]}`; `Booking = {jobId, reference, title, status, category, areaName, cityName, scheduledFor, startAt, endAt, durationMin, onSite}`. Works while the profile is under review |
+| `GET/PATCH/PUT /workers/me` | worker | New `scheduledRadiusKm` ∈ 3, 6, 12, 25, 50 or `null` (PATCH). Must not be smaller than `radiusKm` (`422`) |
+
+### 10.2 Posting a job for a time
+
+| `timing` | `scheduledFor` | Result |
+|---|---|---|
+| `IMMEDIATE` | **not allowed** (`422`) | As soon as possible. `scheduledFor: null`. The booking window starts at confirmation + the quote's ETA |
+| `SCHEDULED` | **required** | An exact appointment |
+| `AFTERNOON` | optional | Default: 14:00 IST today, or 30 minutes from now if that is later. An exact time, if sent, must be today 12:00–20:00 IST |
+| `TOMORROW` | optional | Default: 10:00 IST tomorrow. An exact time, if sent, must be tomorrow (IST) |
+
+`scheduledFor` is ISO 8601 **with an offset** (`2026-10-20T11:00:00+05:30` or `…Z`), at least `SCHEDULE_MIN_LEAD_MIN` (30) minutes and at most `SCHEDULE_MAX_DAYS` (30) days ahead. `durationMin` 15–480: if omitted, the service's own default (`service_categories.default_duration_min`, currently empty for every service) is used, else `BOOKING_DEFAULT_DURATION_MIN` (90). The job's `durationMin` is returned in the response. A scheduled request keeps collecting quotes until its appointment time or 72 hours, whichever is sooner (`expiresAt`); a direct request still lapses after 10 minutes.
+
+### 10.3 What the worker sees on a lead
+
+Lead cards (`GET /leads`, `GET /leads/:id`) gain:
+
+| Field | Meaning |
+|---|---|
+| `scheduledFor`, `durationMin` | The appointment (null = as soon as possible) |
+| `leadState` | `NEW` / `ACCEPTED` / `DECLINED` (the worker's answer, separate from any quote) |
+| `extendedReach` | Inside the worker's wider future-work radius but outside their normal one |
+| `availability` | `{free, etaOptions, reason, nextFreeAt}`. For an immediate job `etaOptions` lists which of 15 / 30 / 45 the worker could keep (empty = none); for a scheduled job it is `null`. `reason` is `OVERLAP` or `TRAVEL_BUFFER`; `nextFreeAt` is the earliest start that would clear the clash. **A busy worker still sees the lead**; this only says whether they can take it |
+
+### 10.4 The five steps, and who sees each
+
+| Step | Record | Event | Failure |
+|---|---|---|---|
+| Lead received | `worker_leads.delivered_at` | `lead.new` to each covering worker, once | – |
+| Lead accepted / declined | `worker_leads.response` | – | `409 SCHEDULE_CONFLICT` on accept if booked |
+| Quote submitted | `offers` PENDING | `offer.new` to the customer | `409 SCHEDULE_CONFLICT` |
+| Quote accepted by the customer | `offers.accepted_at`, status ACCEPTED | `offer.accepted` to the worker | – |
+| Booking confirmed | `jobs.booked_start_at/_end_at`, `booking_confirmed_at` | `booking.confirmed` to customer and worker | `409 WORKER_UNAVAILABLE` (nothing changes, the quote stays) |
+
+The last two commit in one transaction: a customer never holds an accepted quote with no booking.
+
+### 10.5 Availability rule (same for every check)
+
+A booking occupies `[start, start + duration)`. Two bookings of one worker need a gap of at least the larger of `BOOKING_BUFFER_MIN` (15) and the straight-line travel time between the two places at `AVG_SPEED_KMH` (30 minutes if either place has no coordinates). A job the worker is already on site for (`ARRIVED`/`IN_PROGRESS`) keeps them busy until it ends even if it overruns. A worker may have one job in progress and any number of confirmed `ASSIGNED` bookings that respect the gaps. `WORK_COMPLETED` (payment pending) and later no longer hold the slot.
+
+### 10.6 Where the worker is judged to be
+
+| Job starts | Worker's position | Radius |
+|---|---|---|
+| within 2 hours, or as soon as possible | live GPS fix younger than 30 min, else base area | `radiusKm` |
+| later | base area | `max(radiusKm, scheduledRadiusKm)` |
+
+When a worker's location update has moved ≥ 0.5 km from where leads were last matched (or a minute has passed), open leads that now reach them and were not sent before arrive as `lead.new` with `reason:"LOCATION"`. After a job ends or is cancelled the server sends `location.refresh {reason:"JOB_ENDED", jobId}`; **the app must answer it by sending a fix if the person has allowed location**.
+
+### 10.7 Events added
+
+| Event | Sent to | Payload |
+|---|---|---|
+| `booking.confirmed` | the customer and the worker | `{jobId, startAt, endAt, confirmedAt}` |
+| `location.refresh` | the worker | `{reason:"JOB_ENDED", jobId}` |
+| `lead.new` / `direct.request` | as before | plus `scheduledFor` (only when booked for a time) and, for catch-up, `reason:"LOCATION"` |
+
+### 10.8 New error codes
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 409 | `SCHEDULE_CONFLICT` | The **worker's** own action would double-book them (lead accept, quote, revise, direct accept). `details`: `reason`, `nextFreeAt`, `etaMinutes` (the arrival times that would work) |
+| 409 | `WORKER_UNAVAILABLE` | The **customer** picked a worker who is no longer free at that time (accept a quote, create a direct booking). Same `details` |
+| 409 | `DIRECT_JOB` | Also returned by `/leads/:id/accept` and `/decline` for a direct request |
+| 422 | `VALIDATION_FAILED` | `scheduledFor` / `durationMin` / `scheduledRadiusKm` rules above |
+
+### 10.9 What the app must do
+
+Send `scheduledFor` with an offset; show `leadState` and `availability` on lead cards (a busy worker should see *why* they cannot quote and when they are free); grey out quotes with `available:false` and offer the next-free time; handle `409 WORKER_UNAVAILABLE` by refreshing Compare Offers; answer `location.refresh` with a location update; add a screen for `GET /workers/me/schedule`; collect `scheduledRadiusKm` in worker onboarding.
+
+## 11. Fulfilment contract (built in Phase 5)
+
+Everything is under `/api/v1`. **Who may call what is decided by owning the job**, never by a worker's verification status (decision D-8): worker routes need a worker profile but not `verified`, and the query itself says `worker = caller` (or `customer = caller`). Anybody else, and an unknown id, gets the same `404`; a caller with no profile of the required kind gets the usual `403`.
+
+### 11.1 Routes
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `POST /jobs/:id/arrival` `{code}` | assigned worker, job ASSIGNED | `code` = exactly 4 digits. Right → `200`, job ARRIVED (worker's job view). Wrong → `422 ARRIVAL_CODE_INVALID` with how many tries are left; the 5th wrong try and everything after → `429 CODE_LOCKED` (even the right code). A right code on the 5th try still works. `409 WORKER_BUSY` if the worker is already on site at another job (that refusal does not use up a try). Early arrival (before the booked time) is allowed |
+| `PUT /jobs/:id/bill-items` `{items:[{kind,description,amount}]}` | assigned worker, job ARRIVED | **Replaces** the worker's items. `kind` ∈ PARTS, LABOUR, OTHER; `description` 1–120; `amount` whole ₹1–100,000; at most 20 items; `[]` clears. The visit-fee line is untouched. Returns the bill. `bill.updated` goes to the customer |
+| `GET /jobs/:id/bill` | the customer or the assigned worker | `{jobId, status, items[{id,kind,description,amount}], platformFee:0, total, approved, payTo:{name, upiId}}`. `409 BILL_NOT_AVAILABLE` until a worker is chosen |
+| `POST /jobs/:id/bill/approve` `{expectedTotal}` | job's customer, job ARRIVED | The customer approves the total **they were shown**. If the bill has changed: `409 BILL_CHANGED` and nothing happens. Success → IN_PROGRESS and the items freeze (a later edit is `409`). *This differs from the first draft, which had no body* |
+| `POST /jobs/:id/work-photos` `{kind:"BEFORE"\|"AFTER", key}` | assigned worker, job ARRIVED or IN_PROGRESS | `key` from `POST /media/presign` with purpose `WORK_PROOF`, uploaded by this worker. At most 5 per kind (`409 PHOTO_LIMIT`); the same key twice is one photo. `201 {before:[url], after:[url]}`. The customer and the worker see them as `workPhotos` in `GET /jobs/:id` |
+| `POST /jobs/:id/complete-work` | assigned worker, job IN_PROGRESS | → WORK_COMPLETED. Frees the worker's calendar and sends them `location.refresh` |
+| `POST /jobs/:id/payment` `{method:"UPI"\|"CASH"}` | job's customer, job WORK_COMPLETED | Records the payment; **the amount is the bill total, computed on the server** (an `amount` in the body is rejected with `422`). → COMPLETED. Idempotent: a second call (even with the other method, or many at once) returns the first payment unchanged. `{jobId,status,receiptNo,method,amount,platformFee:0,markedAt}` |
+| `GET /jobs/:id/receipt` | the customer or the assigned worker, job COMPLETED | `{receiptNo:"KC-10042", date, jobTitle, customer:{name}, worker:{name}, items[], platformFee:0, total, method}`. No phone, no address. `409 RECEIPT_NOT_AVAILABLE` before payment |
+| `GET /jobs/:id/tracking` | the customer or the assigned worker, job ASSIGNED to WORK_COMPLETED | See §11.3 |
+| `POST /jobs/:id/sos` `{lat?, lng?}` | the customer or the assigned worker, job ASSIGNED to WORK_COMPLETED | `201 {alertId, repeated}`. Both coordinates or neither (`422`). A second tap by the same person within a minute returns the first `alertId` with `repeated:true` and does not page the desk again. `409 SOS_NOT_AVAILABLE` otherwise |
+| `GET /workers/me/jobs?tab=ongoing\|completed\|cancelled&limit=&cursor=` | any worker profile (own history; works while under review) | `{items, nextCursor, meta:{counts}, pendingQuotes?}`. Jobs the worker was given only (ASSIGNED…WORK_COMPLETED / COMPLETED / CANCELLED), newest first. `pendingQuotes` (ongoing tab, first page): quotes the customer has not answered, capped at 50. Items carry `customerName`, area and city, `scheduledFor`, the booked window and the bill `total`; **no address or phone** |
+| `POST /jobs/:id/cancel` `{reason?}` | the customer **or** the assigned worker | Decided by who owns the job. Customer: OPEN/ASSIGNED → CANCELLED (unchanged). Worker: ASSIGNED only → see §11.2. A stranger: `403` if they have no customer profile (as before), otherwise `404` |
+| `PATCH /admin/service-categories/:id/duration` `{defaultDurationMin: 15–480 \| null}` | admin | Sets how long a visit for that service is assumed to take (decision D-14); `null` clears it. Affects only jobs posted afterwards |
+
+### 11.2 A worker backing out
+
+| | Broadcast request | Direct booking (D-3) |
+|---|---|---|
+| Job | back to **OPEN** with the worker, accepted quote, assignment time, arrival code and attempts, booking window and confirmation all cleared; visit-fee bill line removed; fresh deadline (the same rule as when it was posted) | **CANCELLED** (`cancelledBy=WORKER`, reason `BACKED_OUT` unless the worker gave one); the booked window stays for history and no longer blocks the calendar |
+| The worker's quote | WITHDRAWN. They cannot quote or accept that lead again (`409 BACKED_OUT`) and it leaves their radar | – |
+| Other quotes | stay REJECTED. Those workers can send a **new** quote (they hear about the re-open) | – |
+| Leads | the once-only delivery record is reset for everyone except workers who **declined** and the one who backed out, so `lead.new` is sent again exactly once per re-open | – |
+| Events | customer: `job.status` OPEN + `job.reopened`; covering workers: `lead.new`; the worker: `location.refresh` | customer: `job.status` CANCELLED + `direct.declined`; the worker: `location.refresh` |
+| After arriving | `409 INVALID_TRANSITION` (too late) | same |
+
+The backed-out worker's response is the job view **without the address**. An assigned worker never sees the address of a CANCELLED job.
+
+### 11.3 Tracking payload and what it will not claim
+
+`GET /jobs/:id/tracking` → `{status, location, distanceKm, etaMinutes, distanceBasis, …}` plus, for the **customer**: `worker {id, name, trade, vehicle, phone, verified}` and `arrivalCode` (while ASSIGNED or ARRIVED); for the **worker**: `customer {name}` and never the code.
+- `location` = the worker's latest stored fix `{lat, lng, updatedAt, stale}`, or `null` if they never sent one. `stale` is true after 2 minutes.
+- `distanceKm` and `etaMinutes` (straight line ÷ `AVG_SPEED_KMH`) are **only** given when the worker's fix is less than 30 minutes old **and** the job's place has real coordinates. Otherwise both are `null`. Nothing is estimated from a city or guessed.
+- `distanceBasis`: `JOB_COORDINATES` (the customer shared GPS with the address), `AREA_CENTROID` (only the centre of the area is known: approximate) or `null` (no coordinates: no distance). Today the 13 areas have no coordinates (Q-18), so until that is done a distance appears only when the customer's address carries GPS.
+
+### 11.4 Reporting the worker's position
+
+- `PUT /workers/me/location {lat, lng}`: verified workers always (it feeds lead matching); a worker in review only while a job is assigned to them (`403 NOT_VERIFIED` otherwise). One fix per 3 seconds is stored.
+- Socket event **`location:update {jobId, lat, lng}`** (ack `{ok:true, accepted}` or `{ok:false, error:"NOT_FOUND"\|"INVALID"\|"RATE_LIMITED"}`): same effect, but only for a job assigned to this worker that is ASSIGNED or ARRIVED. Not someone else's job and not a finished one: `NOT_FOUND`.
+- Every stored fix of a worker on the way is rebroadcast as **`job.location`** to whoever has done `job:watch` on that job.
+- **After a job ends** (work completed, worker backs out, customer cancels an assigned job) the worker gets **`location.refresh`**. The server cannot ask for permission: **the app must answer by sending a fix if the person has allowed location.** If it does not, nothing is invented: matching keeps using the last real fix for 30 minutes, then the worker's base area. A new fix re-runs lead matching within about a minute (§10.6).
+
+### 11.5 Events added in Phase 5
+
+| Event | Sent to | Payload |
+|---|---|---|
+| `job.location` | watchers of the job (`job:watch`) | `{jobId, lat, lng, updatedAt, distanceKm, etaMinutes, distanceBasis}` (distance fields can be `null`, see §11.3) |
+| `bill.updated` | the customer | `{jobId, total}`: re-fetch `GET /jobs/:id/bill` |
+| `job.reopened` | the customer | `{jobId, reason:"WORKER_BACKED_OUT"}` |
+| `location.refresh` | the worker | `{reason:"JOB_ENDED", jobId}` (also in §10.7) |
+| `job.status` | as before | now also ARRIVED, IN_PROGRESS, WORK_COMPLETED, COMPLETED |
+
+`sos.acknowledged` from the first draft is **not built** (there is no acknowledge endpoint yet).
+
+### 11.6 SOS delivery
+
+The alert is stored first (`sos_alerts`, status OPEN), then sent through the safety channel: `SOS_WEBHOOK_URL` (JSON `POST`, 5 s timeout, no retry) or, if it is not set (development only), the application log. **Production refuses to start without an https `SOS_WEBHOOK_URL`.** If the channel fails the request still succeeds (`201`) and an error is logged. The payload carries: alert id, job reference and status, who raised it with name and phone, the other person, the job's address (where help goes, so the channel must be private) and a location labelled `REPORTED` (sent with the alert), `LAST_WORKER_FIX` (the worker's latest stored fix, with its age) or `null` (unknown).
+
+### 11.7 New error codes
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 422 | `ARRIVAL_CODE_INVALID` | Wrong arrival code; `details` says how many tries are left |
+| 429 | `CODE_LOCKED` | Five wrong codes; the job cannot be arrived at with a code any more |
+| 409 | `WORKER_BUSY` | The worker is already on site at another job |
+| 409 | `BILL_CHANGED` | The bill changed since the customer last looked; `details` gives the current total |
+| 409 | `BILL_NOT_AVAILABLE` · `RECEIPT_NOT_AVAILABLE` · `TRACKING_NOT_AVAILABLE` · `SOS_NOT_AVAILABLE` | Asked at a stage where it does not exist yet / any more |
+| 409 | `PHOTO_LIMIT` | Already five photos of that kind |
+| 409 | `BACKED_OUT` | The worker backed out of this request and cannot quote or accept it again |
+| 409 | `INVALID_TRANSITION` | The job's state does not allow it (also for every out-of-order call above) |
+
+### 11.8 What the app must do
+
+Show the arrival code to the customer and a code box to the worker (with the tries left); a bill screen where the worker edits and the customer approves the **total shown** (send `expectedTotal`; handle `BILL_CHANGED` by re-fetching); payment and receipt screens; the live map from `GET …/tracking` then `job.location`, **drawing no distance when it is `null`**; the worker app sends `location:update` while on the way and answers `location.refresh` with a fix; handle `job.reopened` (back to "waiting for quotes") and a worker-side "back out" button; an SOS button; the worker's Activity from `GET /workers/me/jobs`.

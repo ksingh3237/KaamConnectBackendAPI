@@ -1,6 +1,6 @@
 # 02 · Database Architecture
 
-PostgreSQL 16+ (local instance is v18) · Prisma ORM 7.10.x (pin; see §7) · full proposed schema: [`proposed-schema.prisma`](./proposed-schema.prisma).
+PostgreSQL 16+ (local instance is v18) · Prisma ORM 7.10.x (pin; see §7) · full proposed schema: [`prisma/schema.prisma`](../prisma/schema.prisma).
 Every entity below maps to something visible in the app (see `01-requirements.md`). Fields tagged *(gap)* exist because the UI shows the data but never collects it.
 
 ## 1. ER diagram
@@ -166,6 +166,9 @@ erDiagram
 | `payments` | UPI/Cash "Paid" buttons | 1:1 with job. Records only; `CONFIRMED` is for a future worker confirmation (no UI yet) |
 | `reviews` | Rating screen | One per job; `tags` is an enum array; tip is a recorded amount (Q-8) |
 | `sos_alerts` | Tracking SOS | Stores who/where/when so the safety desk can act |
+| `worker_leads` | Which lead reached which worker, and their answer (added with scheduling, migration `20261010180000_scheduling_and_availability`) | PK `(job_id, worker_id)`. Its existence is the "already sent" guard that stops a duplicate `lead.new` (BR-22); `response` = ACCEPTED / DECLINED records lead acceptance (BR-18). Cascades with the job and the worker |
+
+**Scheduling columns (same migration).** `jobs.scheduled_for` (requested appointment start, null = as soon as possible), `duration_min` (default 90), `booked_start_at` / `booked_end_at` / `booking_confirmed_at` (the reserved window, set when the booking is confirmed), `offers.accepted_at` (when the customer accepted the quote), `worker_profiles.scheduled_radius_km` (how far the worker will travel for future work; null = same as `radius_km`), and `JobTiming` gained `SCHEDULED`. A second small migration, `20261011090000_category_default_duration`, adds `service_categories.default_duration_min` (nullable, 15–480; empty = use the global default of 90, decision D-14).
 
 Intentionally **not** modelled (not in the UI): wallet balance, notifications inbox, chat, coupons, admin dashboards, worker availability/online toggle ("24 Online" is static text), invoices table (a receipt is generated from job + bill items + payment).
 
@@ -198,37 +201,42 @@ Intentionally **not** modelled (not in the UI): wallet balance, notifications in
 | `payments (marked_at)` | Earnings / savings aggregates |
 | `otp_challenges (phone, created_at)` | Cooldown + rate-limit lookups |
 | `sos_alerts (status, created_at)` | Safety-desk queue |
+| `worker_leads (worker_id, delivered_at)` | A worker's leads, newest first; the `(job_id, worker_id)` primary key serves the duplicate guard |
+| partial `jobs (worker_id, booked_start_at) WHERE status IN ('ASSIGNED','ARRIVED','IN_PROGRESS')` | The availability check: one worker's active bookings in time order |
 
 No PostGIS in v1 (A-5): Tricity-scale haversine over an area-pre-filtered set is cheap. Revisit if worker count > ~50k or radius search needs ordering by true distance in SQL.
 
-## 5. Constraints Prisma can't express (hand-written in the first migration)
+## 5. Constraints Prisma can't express (hand-written at the end of the migrations)
 
-```sql
--- Money and ranges
-ALTER TABLE offers          ADD CONSTRAINT offers_fee_pos       CHECK (visit_fee > 0 AND visit_fee <= 100000);
-ALTER TABLE offers          ADD CONSTRAINT offers_eta_range     CHECK (eta_minutes BETWEEN 5 AND 240);
-ALTER TABLE bill_items      ADD CONSTRAINT bill_amount_nonneg   CHECK (amount >= 0);
-ALTER TABLE payments        ADD CONSTRAINT pay_amount_pos       CHECK (amount > 0);
-ALTER TABLE reviews         ADD CONSTRAINT review_rating_range  CHECK (rating BETWEEN 1 AND 5);
-ALTER TABLE reviews         ADD CONSTRAINT review_tip_nonneg    CHECK (tip_amount >= 0);
-ALTER TABLE worker_profiles ADD CONSTRAINT wp_radius_allowed    CHECK (radius_km IN (3, 6, 12));
-ALTER TABLE worker_profiles ADD CONSTRAINT wp_exp_range         CHECK (experience_years BETWEEN 1 AND 40);
+The authoritative SQL is the last block of `prisma/migrations/20261010150000_baseline/migration.sql` and of `prisma/migrations/20261010180000_scheduling_and_availability/migration.sql` and `20261011090000_category_default_duration/migration.sql`; each rule below has a test in `test/db-constraints.e2e-spec.ts` or `test/scheduling.e2e-spec.ts` that runs against a real PostgreSQL.
 
--- One primary address per customer; one primary trade per worker
-CREATE UNIQUE INDEX addresses_one_primary ON addresses (customer_id) WHERE is_primary;
-CREATE UNIQUE INDEX worker_trades_one_primary ON worker_trades (worker_id) WHERE is_primary;
+| Rule | Constraint / index |
+|---|---|
+| Quote fee 1–100 000, ETA 5–240 min | `offers_fee_range`, `offers_eta_range` |
+| Bill items ≥ 0, payment > 0 | `bill_items_amount_nonneg`, `payments_amount_pos` |
+| Rating 1–5, tip ≥ 0 | `reviews_rating_range`, `reviews_tip_nonneg` |
+| Worker radius ∈ {3, 6, 12}, experience 1–40, counters ≥ 0, fee > 0 | `worker_profiles_radius_allowed`, `_experience_range`, `_counters_nonneg`, `_visiting_fee_nonneg` |
+| Category base fee ≥ 0 | `service_categories_fee_nonneg` |
+| Latitude/longitude ranges | `areas_/addresses_/jobs_/sos_alerts_coords_range`, `worker_locations_coords_range` |
+| One primary address per customer | partial unique index `addresses_one_primary_per_customer` (`WHERE is_primary`) |
+| One primary trade per worker | partial unique index `worker_trades_one_primary_per_worker` |
+| Assigned/active job must have a worker | `jobs_assigned_has_worker` |
+| Arrival code is exactly 4 digits | `jobs_arrival_code_format` |
+| A cancelled job records who and when | `jobs_cancelled_has_actor` |
+| **No overlapping bookings for one worker** (BR-17): two jobs in `ASSIGNED` / `ARRIVED` / `IN_PROGRESS` cannot have overlapping `[booked_start_at, booked_end_at)` windows; back-to-back is allowed, `WORK_COMPLETED`/`COMPLETED`/`CANCELLED` free the slot | exclusion constraint `jobs_worker_no_overlap` (`EXCLUDE USING gist (worker_id WITH =, tstzrange(...) WITH &&) WHERE …`). Needs the `btree_gist` extension: `CREATE EXTENSION IF NOT EXISTS btree_gist` is in the migration; it is a *trusted* extension, so the database owner can create it (also on RDS) |
+| **One job in progress per worker** (BR-14) | partial unique index `jobs_one_in_progress_per_worker` (`WHERE status IN ('ARRIVED','IN_PROGRESS')`) |
+| A booking window is both ends or neither, and ends after it starts | `jobs_booking_window_valid` |
+| Once assigned a job must have its booking window and confirmation time | `jobs_assigned_has_booking` (the migration back-fills jobs that were already assigned) |
+| Duration 15–480 minutes | `jobs_duration_range`, `service_categories_duration_range` (the per-service default) |
+| Future-work radius ∈ {3, 6, 12, 25, 50} | `worker_profiles_scheduled_radius_allowed` (the rule "not below `radius_km`" is enforced in the API; matching uses the larger of the two) |
+| A lead answer has its time and vice versa | `worker_leads_response_pair` |
+| First job is KC-10000 | `ALTER SEQUENCE jobs_job_number_seq START WITH 10000 RESTART` (START WITH, so `TRUNCATE … RESTART IDENTITY` in tests also returns to 10000) |
 
--- State coherence
-ALTER TABLE jobs ADD CONSTRAINT jobs_assigned_has_worker
-  CHECK (status IN ('OPEN','CANCELLED') OR worker_id IS NOT NULL);
-
--- Human-friendly job numbers start at 10000 (UI shows KC-88421 style numbers)
-ALTER SEQUENCE jobs_job_number_seq RESTART WITH 10000;
-```
-
-(Prisma 8 can declare partial indexes in-schema; we stay on Prisma 7 so they live in SQL migrations. They survive `migrate dev` as long as they are in the migration files.)
+**Verified (2026-10-10, Prisma 7.10.0, PostgreSQL 18):** `prisma migrate diff` between the migrated database and `schema.prisma` reports *no difference*, i.e. Prisma ignores these CHECKs and partial indexes and will **not** try to drop them on a later `migrate dev`. CI repeats this drift check on every push. Prisma 8 can declare partial indexes in the schema; revisit after it is GA.
 
 ## 6. Integrity rules enforced in code (inside a transaction)
+
+*Phase 5 (fulfilment) needed no migration: it uses `jobs.arrival_attempts`, `bill_items`, `payments`, `sos_alerts` and the booking columns that already existed. `worker_leads` rows are now also deleted on a re-open (docs `03-api-spec.md §11.2`).*
 
 | Rule | Mechanism |
 |---|---|
@@ -240,6 +248,8 @@ ALTER SEQUENCE jobs_job_number_seq RESTART WITH 10000;
 | Max 2 trades | DTO `@ArrayMaxSize(2)` + service re-check on write |
 | Bill editable only while `ARRIVED` (before approval) | State check; approval snapshots the total |
 | Payment amount = Σ bill items | Computed server-side, client sends only the method |
+| Confirm a booking only if the worker is free (BR-16) | Inside the confirming transaction: `pg_advisory_xact_lock(hashtext('booking:<workerId>'))`, then read the worker's active bookings and apply the overlap + travel-gap rule (`AvailabilityService.reserve`). The lock is what protects the travel gap (the database cannot see it); the exclusion constraint is the backstop for hard overlaps and its violation (`23P01`) is mapped to the same `409`. Verified by a mutation check: with the lock removed, two simultaneous accepts 15 minutes apart both succeed |
+| Send a lead to a worker once (BR-22) | `INSERT INTO worker_leads … ON CONFLICT DO NOTHING RETURNING` (`LeadDeliveryService.claim`): only newly inserted rows are pushed |
 
 ## 7. Version pinning (important)
 
@@ -248,3 +258,7 @@ Verified against npm/Prisma docs on 2026-10-10:
 - `npm install prisma` currently resolves to the **8.0 RC CLI, which does not read `schema.prisma` and has no `generate`/`migrate dev`/`db push`**. The project must pin `prisma@7.10.0` and `@prisma/client@~7.10` exactly.
 - Prisma 7 specifics we will follow: `prisma.config.ts` holds the datasource URL and the `migrations.seed` command; `generator client { provider = "prisma-client" }` with an explicit `output`; PostgreSQL via the `@prisma/adapter-pg` driver adapter; `.env` is not auto-loaded (load `dotenv` in the config); `migrate dev` does not auto-run seeds.
 - Re-evaluate Prisma 8 after GA; the migration guide supports running 7 and 8 side by side.
+
+## 8. Time zone and timestamps
+
+All timestamps are `timestamptz` and every app connection is pinned to the **UTC** session time zone (`src/prisma/pg-adapter.ts`). This was added after a test showed that Prisma's pg adapter stores timestamps shifted by the *server's* own zone when it is not UTC (a local PostgreSQL set to Asia/Calcutta stored rows 5 h 30 min off, invisible in app-only round trips but wrong for SQL `now()` and tools like pgAdmin). `test/timestamps.e2e-spec.ts` guards against regressions. "Today" for earnings is still computed in `Asia/Kolkata` in application code (Phase 6).

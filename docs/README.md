@@ -1,108 +1,63 @@
-# KaamConnect Backend API
+# KaamConnect Backend: Documentation Index
 
-REST API for the KaamConnect mobile app (hyperlocal home-services marketplace for Chandigarh · Mohali · Panchkula).
-
-> **Status: Phase 1 (analysis & design) complete; awaiting explicit approval to start the build. No code exists yet.** Requirements, assumptions, recorded decisions and open questions are in [01-requirements.md](./01-requirements.md). Sections below describe the **planned** setup and become real after Phase 0.
-
-## Tech stack
-
-| Layer | Choice |
-|---|---|
-| Runtime | Node.js 24 (≥ 20.19 required by Prisma 7) |
-| Framework | NestJS 12, TypeScript |
-| Database | PostgreSQL 16+ |
-| ORM / migrations | Prisma ORM **7.10.0** (pinned — do not run a bare `npm i prisma`, it installs the Prisma 8 RC) |
-| Auth | Phone OTP (console sender in dev, MSG91 later) → JWT access token + rotating refresh token; OTPs/sessions stored in PostgreSQL |
-| Real-time | Socket.IO (`@nestjs/websockets`) for bids, lead broadcast, job tracking |
-| Cache / scaling | Redis **optional** — not required in v1; plug-in seams ready (Socket.IO adapter, cache, throttler) |
-| Storage | S3-compatible object storage (presigned uploads) |
-| Tests | Jest, supertest, real PostgreSQL test database |
-
-## Prerequisites
-
-- Node.js 24 and npm
-- Native PostgreSQL running locally (this machine: v18, service `postgresql-x64-18`, pgAdmin 4) — no Docker needed
-- Two existing databases: `KaamConnect` (dev) and `KaamConnect_test` (tests). Use the exact case in the URL
-
-## Planned project layout
-
-```
-KaamConnectBackendAPI/
-├─ prisma/            schema.prisma, migrations/, seed.ts, seed-demo.ts
-├─ prisma.config.ts   datasource URL + seed command
-├─ src/
-│  ├─ main.ts, app.module.ts
-│  ├─ config/  prisma/  common/
-│  └─ modules/  auth · users · catalog · customers · workers · media · jobs · offers · realtime · reviews · safety · admin · health
-├─ test/              e2e tests
-├─ docs/              this documentation
-└─ .env.example
-```
-
-## Setup (after Phase 0)
-
-```bash
-# 1. install dependencies
-npm install
-
-# 2. configure environment
-cp .env.example .env          # then fill DATABASE_URL and the JWT/OTP secrets
-
-# 3. create the database schema (local only)
-npm run db:migrate:dev
-
-# 4. load reference data (categories, cities, areas)
-npm run db:seed
-npm run db:seed:demo          # optional sample users/jobs, dev only
-
-# 5. run
-npm run start:dev             # REST http://localhost:3000/api/v1 · Socket.IO ws://localhost:3000/realtime
-                              # Swagger: http://localhost:3000/api/docs (non-production)
-```
-
-## Environment variables
-
-Defined and validated at boot (the app refuses to start if invalid). Full list in [04-architecture.md §5](./04-architecture.md).
-
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_ACCESS_SECRET` | ≥ 32 random bytes |
-| `OTP_PEPPER` | key for hashing OTP codes |
-| `OTP_DEV_BYPASS` | dev-only fixed OTP; boot fails if `true` in production |
-| `WORKER_VERIFICATION_MODE` | `auto` (dev: simulated approval) or `manual` (production admin review); boot fails on `auto` in production |
-| `COMMISSION_BENCHMARK_RATE` | competitor commission for the "Total saved" figure, default `0.20` |
-| `REDIS_URL` | optional; empty = in-memory |
-| `SMS_PROVIDER` / `SMS_API_KEY` | OTP delivery (`console` in dev) |
-| `STORAGE_*` | object storage endpoint, buckets, keys |
-
-Never commit `.env`; `.env.example` holds keys only.
-
-## Scripts (planned)
-
-| Script | Does |
-|---|---|
-| `start:dev` / `build` / `start:prod` | run / compile / run compiled |
-| `db:migrate:dev` | `prisma migrate dev` (local only) |
-| `db:migrate` | `prisma migrate deploy` (CI/staging/production) |
-| `db:generate` | `prisma generate` |
-| `db:seed` / `db:seed:demo` | reference data / sample data |
-| `test` / `test:e2e` | unit / integration tests |
-| `lint` | ESLint + `tsc --noEmit` |
-
-## Database workflow in one paragraph
-
-Edit `schema.prisma` → `npm run db:migrate:dev -- --name <change>` → review the generated SQL → commit it. Production applies only `prisma migrate deploy`. Never run `migrate reset` or `db push` outside a local database. Details: [06-migrations-seeds.md](./06-migrations-seeds.md).
-
-## Documentation index
+Project setup and commands are in the [root README](../README.md). This folder holds the design.
 
 | Doc | Contents |
 |---|---|
-| [01-requirements.md](./01-requirements.md) | Roles, screen→backend map, business rules, state machine, UI gaps, **assumptions, open questions** |
+| [01-requirements.md](./01-requirements.md) | Roles, screen→backend map, business rules, state machine, UI gaps, **assumptions, decisions, open questions** |
 | [02-database.md](./02-database.md) | ER diagram, entities, indexes, constraints, Prisma version pinning |
-| [proposed-schema.prisma](./proposed-schema.prisma) | Proposed Prisma schema (not yet applied) |
-| [03-api-spec.md](./03-api-spec.md) | Endpoints per screen, DTOs, validation, privacy matrix |
-| [04-architecture.md](./04-architecture.md) | NestJS modules, cross-cutting design, environment variables |
+| [prisma/schema.prisma](../prisma/schema.prisma) | Prisma schema (applied in Phase 1) |
+| [03-api-spec.md](./03-api-spec.md) | Endpoints per screen, DTOs, validation, privacy matrix, Socket.IO events |
+| [04-architecture.md](./04-architecture.md) | NestJS modules, cross-cutting design, environment variables, real-time and Redis seams |
 | [05-security-testing.md](./05-security-testing.md) | Security controls, authorization matrix, test strategy |
 | [06-migrations-seeds.md](./06-migrations-seeds.md) | Migration workflow, seeds, environments |
 | [07-roadmap.md](./07-roadmap.md) | Phases, acceptance criteria, risks, estimates |
+| [progress.md](./progress.md) | **Current status**: what is built and verified, known issues, open questions, dependencies, exact next task |
+
+## Build status
+
+| Phase | State |
+|---|---|
+| 0 Scaffold, config, health, CI | **Done** (see below) |
+| 1 Schema, reference data, catalog API | **Done**: 19 tables migrated and seeded on `KaamConnect` and `KaamConnect_test` |
+| 2 Auth & account | **Done**: phone OTP, JWT + rotating refresh tokens, `/me`, global login guard |
+| 3 Profiles, media, verification | **Done**: customer/worker profiles, address book, signed uploads, admin review, worker GPS ping |
+| 4 Jobs, leads, quotes, direct booking, discovery, Socket.IO | **Done**: 16 new routes, live push, benchmark at 5,000 workers / 50,000 jobs |
+| 5 Tracking, arrival, bill, payment, SOS | Next |
+| 6–7 | Not started |
+
+### Phase 0 deviations from the plan
+- Nest 12's template is **ESM + Vitest + oxlint**; the plan said Jest/ESLint. Docs updated; no functional impact.
+- npm 11.3 cannot resolve Vitest 4's peers; `.npmrc` sets `legacy-peer-deps=true`.
+- `JWT_*`, `OTP_*`, `STORAGE_*` variables are added in the phase that first uses them, not in Phase 0.
+- Prisma 7 generates a client from a schema with no models, so health can run before Phase 1.
+
+### Phase 1 notes
+- Baseline migration `20261010150000_baseline` was generated offline with `prisma migrate diff --from-empty`, then the hand-written CHECKs/partial indexes were appended (see `02-database.md §5`). It was applied with `migrate deploy`; `migrate reset` / `db push` were never used.
+- `GET /locations` and `GET /service-categories` are **public until Phase 2** adds the global JWT guard; they return reference data only.
+- Area centroids (`lat`/`lng`) are empty on purpose, see Q-18 in `01-requirements.md`.
+
+### Phase 2 notes
+- Auth contract, error codes and what the app must do: `03-api-spec.md §7`. Controls and tests: `05-security-testing.md §5`.
+- `.env` needs `JWT_ACCESS_SECRET` and `OTP_PEPPER` (generated and appended to the local `.env`; never committed).
+- The catalog endpoints now require login.
+
+### Phase 3 notes
+- Contract: `03-api-spec.md §8`. Controls and tests: `05-security-testing.md §6`.
+- Found and fixed a PostgreSQL time-zone bug in how timestamps were stored (see `02-database.md §8`); the dev database had no data affected.
+- Open questions Q-19 to Q-21 added in `01-requirements.md`; answered 2026-10-10 as decisions D-8 to D-10 (not built yet). Q-22 (photo change also triggers review) was answered yes and is part of D-8.
+
+### Phase 4 notes
+- Contract: `03-api-spec.md §9`. Architecture: `04-architecture.md §8`. Controls, findings and benchmark: `05-security-testing.md §7`.
+- Area coordinates (Q-18) are still empty, so matching uses the same-city fallback; the radius rule is built, tested and switches on as soon as coordinates are in the seed data.
+- Current status, known issues and the next task: `progress.md`.
+
+### Scheduling and availability notes (added after Phase 4, before Phase 5)
+- Requirements and rules: `01-requirements.md` (FR-SCHEDULING, BR-13 to BR-22, A-13 to A-18, Q-23 to Q-26). Contract: `03-api-spec.md §10`. Design: `04-architecture.md §9`. Database: `02-database.md §5`. Controls and tests: `05-security-testing.md §8`.
+- New migrations `20261010180000_scheduling_and_availability` (needs the `btree_gist` extension) and `20261011090000_category_default_duration`. Both are applied to the test database (automatically by the e2e harness) and to the dev database `KaamConnect` (2026-10-11, after a backup; details in `progress.md` K-21). Any new environment, including CI and production, needs `btree_gist` to be creatable by the migrating role.
+- New optional settings in `.env.example`: `BOOKING_*`, `SCHEDULE_*`, `SCHEDULED_JOB_OPEN_TTL_HOURS`.
+
+### Phase 5 notes
+- Contract: `03-api-spec.md §11`. Architecture: `04-architecture.md §10`. Controls, mutation check and findings: `05-security-testing.md §9`. Roadmap status: `07-roadmap.md`. Current status, known issues (K-26 to K-31) and the next steps: `progress.md`.
+- New optional setting `SOS_WEBHOOK_URL` (required and https in production). No migration.
+- **Not verified yet:** GitHub CI and the idle-machine benchmark.

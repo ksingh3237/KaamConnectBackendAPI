@@ -1,12 +1,11 @@
-// PROPOSED schema for Prisma ORM 7.10.x (NOT yet applied; Phase 1 deliverable).
-// Move to prisma/schema.prisma in Phase 2. The datasource URL lives in prisma.config.ts (Prisma 7).
-// Raw-SQL constraints Prisma cannot express are listed in docs/02-database.md §5 and
-// are added by hand to the first migration (created with --create-only).
+// KaamConnect domain schema (Prisma ORM 7.10). Design rationale: docs/02-database.md.
+// The datasource URL lives in prisma.config.ts (Prisma 7).
+// Raw-SQL constraints Prisma cannot express (CHECKs, partial unique indexes, sequence start)
+// are hand-written at the end of prisma/migrations/*_baseline/migration.sql; keep them there.
 //
 // Conventions: snake_case tables/columns via @map/@@map, UUIDv7 primary keys for
 // transactional data, Int PKs for small reference tables, money in whole INR (Int),
 // timestamps are timestamptz (UTC).
-
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
@@ -44,6 +43,13 @@ enum JobTiming {
   IMMEDIATE // "Immediate (30m)"
   AFTERNOON
   TOMORROW
+  SCHEDULED // exact future date and time (scheduled_for is required)
+}
+
+// A worker's answer to a lead that reached them (lead acceptance is separate from quoting and from booking).
+enum LeadResponse {
+  ACCEPTED
+  DECLINED
 }
 
 enum JobStatus {
@@ -193,6 +199,7 @@ model ServiceCategory {
   color         String  @db.VarChar(7)
   bgColor       String  @map("bg_color") @db.VarChar(7)
   baseVisitFee  Int     @map("base_visit_fee") // INR, shown as "₹200 visit"
+  defaultDurationMin Int? @map("default_duration_min") // CHECK BETWEEN 15 AND 480; null = BOOKING_DEFAULT_DURATION_MIN (decision D-14)
   examples      String
   sortOrder     Int     @default(0) @map("sort_order")
   isActive      Boolean @default(true) @map("is_active")
@@ -248,6 +255,7 @@ model WorkerProfile {
   photoKey           String?            @map("photo_key")
   baseAreaId         Int                @map("base_area_id")
   radiusKm           Int                @default(6) @map("radius_km") // CHECK IN (3,6,12)
+  scheduledRadiusKm  Int?               @map("scheduled_radius_km") // CHECK IN (3,6,12,25,50): how far the worker will travel for future jobs; null = same as radius_km. Matching uses max(radius_km, this)
   experienceYears    Int                @map("experience_years")      // CHECK BETWEEN 1 AND 40
   languages          Language[]
   skills             String[]
@@ -273,6 +281,7 @@ model WorkerProfile {
   jobs         Job[] @relation("JobAssignedWorker")
   directJobs   Job[] @relation("JobTargetWorker")
   reviews   Review[]
+  leads     WorkerLead[]
 
   @@index([baseAreaId, verificationStatus])
   @@map("worker_profiles")
@@ -326,6 +335,11 @@ model Job {
   title           String      @db.VarChar(120)
   description     String?     @db.VarChar(1000)
   timing          JobTiming
+  scheduledFor    DateTime?   @map("scheduled_for") @db.Timestamptz(3) // requested appointment start; null = as soon as possible
+  durationMin     Int         @default(90) @map("duration_min")          // CHECK BETWEEN 15 AND 480; length of the booking window
+  bookedStartAt   DateTime?   @map("booked_start_at") @db.Timestamptz(3) // the worker's reserved window, set when the booking is confirmed
+  bookedEndAt     DateTime?   @map("booked_end_at") @db.Timestamptz(3)
+  bookingConfirmedAt DateTime? @map("booking_confirmed_at") @db.Timestamptz(3)
   areaId          Int         @map("area_id")
   addressLine     String      @map("address_line") @db.VarChar(200) // snapshot; revealed only to the assigned worker
   lat             Float?
@@ -360,13 +374,36 @@ model Job {
   payment       Payment?
   review        Review?
   sosAlerts     SosAlert[]
+  workerLeads   WorkerLead[]
 
+  // Hand-written in the scheduling migration (Prisma cannot express them), keep them there:
+  //  - jobs_worker_no_overlap: EXCLUDE USING gist (worker_id =, tstzrange(booked_start_at, booked_end_at) &&)
+  //    WHERE status IN ('ASSIGNED','ARRIVED','IN_PROGRESS')  => one worker, no overlapping bookings
+  //  - jobs_one_in_progress_per_worker: UNIQUE (worker_id) WHERE status IN ('ARRIVED','IN_PROGRESS')
+  //  - jobs_worker_booked_idx: (worker_id, booked_start_at) WHERE status IN ('ASSIGNED','ARRIVED','IN_PROGRESS')
   @@index([status, categoryId, areaId, createdAt]) // worker lead feed
   @@index([customerId, status, createdAt])         // customer "My Jobs" tabs
   @@index([workerId, status, createdAt])           // worker "My Jobs" tabs / earnings
   @@index([targetWorkerId, status])                // direct requests waiting for a worker
   @@index([status, expiresAt])                     // expiry sweeper
   @@map("jobs")
+}
+
+// One row per (job, worker) lead that reached the worker. Its existence is the "already sent" guard that
+// keeps a lead from being pushed twice; `response` records lead acceptance / decline.
+model WorkerLead {
+  jobId       String        @map("job_id") @db.Uuid
+  workerId    String        @map("worker_id") @db.Uuid
+  deliveredAt DateTime      @default(now()) @map("delivered_at") @db.Timestamptz(3)
+  response    LeadResponse?
+  respondedAt DateTime?     @map("responded_at") @db.Timestamptz(3)
+
+  job    Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  worker WorkerProfile @relation(fields: [workerId], references: [userId], onDelete: Cascade)
+
+  @@id([jobId, workerId])
+  @@index([workerId, deliveredAt])
+  @@map("worker_leads")
 }
 
 model JobMedia {
@@ -391,6 +428,7 @@ model Offer {
   etaMinutes Int         @map("eta_minutes") // UI offers 15 / 30 / 45
   message    String?     @db.VarChar(300)
   status     OfferStatus @default(PENDING)
+  acceptedAt DateTime?   @map("accepted_at") @db.Timestamptz(3) // when the customer accepted this quote
   createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 

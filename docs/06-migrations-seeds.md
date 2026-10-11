@@ -36,14 +36,16 @@ Safety rules
 
 ## 4. Seed scripts
 
-### `prisma/seed.ts` — reference data (safe in every environment, idempotent via `upsert` on natural keys)
+### `prisma/seed.ts` — reference data (safe in every environment, idempotent)
+
+Implemented in `prisma/seed/reference-data.ts` (also used by the tests); run with `npm run db:seed`. Never deletes; never re-activates a category whose `isActive` was switched off; reports created/existing counts.
 
 | Data | Source | Count |
 |---|---|---|
 | `service_categories` | `constants/mockData.ts` `SERVICE_CATEGORIES` (ids, EN/HI/PA titles, icon, colours, `baseFee`→int, examples), `sortOrder` in listed order | 8 |
 | `cities` | Chandigarh, Mohali (SAS Nagar), Panchkula | 3 |
-| `areas` | Union of the two app lists: Chandigarh – Sector 15, 17, 22, 35, 43 · Mohali – Phase 3B2, 5, 7, Sector 70 · Panchkula – Sector 11, 20, MDC Sector 4. Legacy prototype extras (Sector 8, Manimajra, Sector 68, Kharar Road, Sector 5/12 …) are in the seed file behind a flag (Q-11) | 12 (+7) |
-| Area centroids | `lat/lng` per area — **to be supplied/verified**; approximate values are sufficient for radius filtering but must not be treated as authoritative | – |
+| `areas` | Union of the two app lists: Chandigarh – Sector 15, 17, 22, 35, 43 · Mohali – Phase 3B2, 5, 7, Sector 70 · Panchkula – Sector 5, 11, 20, MDC Sector 4. The 6 legacy-prototype extras (Chandigarh: Sector 8, Manimajra · Mohali: Sector 68, Kharar Road · Panchkula: Sector 12, 15) are seeded only with `SEED_LEGACY_AREAS=true` (Q-11) | 13 (+6) |
+| Area centroids | `lat/lng` are **deliberately left empty** in `prisma/data/locations.ts`: they must come from a verified source, not from memory. The seed only *fills* a missing centroid and never overwrites one. Until they are filled, distance falls back to "same area" (Phase 4 needs them) | – |
 | Sequence | `jobs_job_number_seq` start (done in migration, not seed) | – |
 
 Rules: re-running changes nothing; never deletes; logs created/updated counts; exits non-zero on error.
@@ -64,5 +66,12 @@ db:generate      prisma generate
 db:seed          prisma db seed
 db:seed:demo     tsx prisma/seed-demo.ts
 db:studio        prisma studio              (local only)
-test             jest · test:e2e  jest --config test/jest-e2e.json
+test             vitest run · test:e2e  vitest run --config vitest.config.e2e.ts
 ```
+
+## 7. Operating notes added in Phase 3
+
+- **Creating the first admin** (there is deliberately no API for it): sign in once with the phone number, then run in pgAdmin: `UPDATE users SET is_admin = true WHERE phone = '+91XXXXXXXXXX';`. Revoking works the same way and takes effect on the next request.
+- **Local uploads** go to `.local-storage/` (git-ignored). Delete the folder to reset them. Rows that point at deleted files will fail the "file must exist" check only when re-submitted.
+- **Database time zone:** no server setting is required; the app pins its own connections to UTC (see `02-database.md §8`).
+- **Production storage:** two buckets (media, private), block all public access on both, default encryption on (SSE-KMS recommended for the private one), and an IAM role for the API with only `s3:PutObject`, `s3:GetObject`, `s3:HeadObject` on those buckets. Mobile uploads use presigned URLs, so no bucket CORS is needed.
