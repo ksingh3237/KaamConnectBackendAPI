@@ -15,6 +15,8 @@ import {
 export const API_PREFIX = 'api/v1';
 
 export interface ConfigureOptions {
+  /** Overrides CORS_ORIGINS (tests). */
+  corsOrigins?: string[];
   /** One masked log line per finished request. On for the real server; the e2e suite turns it off to keep its output readable. */
   requestLogging?: boolean;
 }
@@ -39,6 +41,20 @@ export function configureApp(
   // After `trust proxy` (so the client address is the real one) and before everything that can refuse a request.
   if (options.requestLogging ?? true) app.use(requestLogger());
   app.use(helmet());
+  // Browser clients (Expo web) are only served when their exact origin is listed; the default is none.
+  const corsOrigins =
+    options.corsOrigins ??
+    parseOrigins(config.get('CORS_ORIGINS', { infer: true }));
+  if (corsOrigins.length > 0) {
+    app.enableCors({
+      origin: corsOrigins,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Authorization', 'Content-Type', 'X-Request-Id'],
+      exposedHeaders: ['X-Request-Id', 'Retry-After'],
+      credentials: false,
+      maxAge: 600,
+    });
+  }
   app.setGlobalPrefix(API_PREFIX, { exclude: ['health', 'health/ready'] });
   app.useGlobalPipes(createValidationPipe());
   app.useGlobalFilters(new AllExceptionsFilter());

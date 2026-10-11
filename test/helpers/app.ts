@@ -79,6 +79,8 @@ export async function createTestApp(
     requestLogging?: boolean;
     /** Lowers the per-user rate limit (requests per minute) for a spec that tests it. */
     userRateLimitPerMin?: number;
+    /** Origins allowed to call the HTTP API from a browser (CORS) for a spec that tests it. */
+    corsOrigins?: string[];
   } = {},
 ): Promise<TestApp> {
   const sender = new RecordingOtpSender();
@@ -98,7 +100,10 @@ export async function createTestApp(
     .compile();
 
   const app = moduleRef.createNestApplication();
-  configureApp(app, { requestLogging: options.requestLogging ?? false });
+  configureApp(app, {
+    requestLogging: options.requestLogging ?? false,
+    ...(options.corsOrigins ? { corsOrigins: options.corsOrigins } : {}),
+  });
   // Listen once on an ephemeral port so supertest reuses it instead of re-listening per request.
   await app.listen(0, '127.0.0.1');
   return {

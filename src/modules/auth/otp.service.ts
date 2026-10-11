@@ -15,6 +15,12 @@ const DEV_BYPASS_CODE = '123456';
 export interface OtpRequestResult {
   resendAfterSec: number;
   expiresInSec: number;
+  /**
+   * PRESENT ONLY WHEN OTP_DEV_BYPASS IS ON (local development; the configuration check refuses that setting in
+   * production, so this field cannot appear there). Tells the developer, and lets the app show a banner, that no
+   * SMS is sent and which fixed code to type.
+   */
+  devNotice?: string;
 }
 
 /**
@@ -119,7 +125,16 @@ export class OtpService {
       );
     }
 
-    return { resendAfterSec, expiresInSec };
+    const bypass = this.config.get('OTP_DEV_BYPASS', { infer: true });
+    return {
+      resendAfterSec,
+      expiresInSec,
+      ...(bypass
+        ? {
+            devNotice: `DEVELOPMENT ONLY: no SMS is sent. The code is ${DEV_BYPASS_CODE} for every number.`,
+          }
+        : {}),
+    };
   }
 
   /**

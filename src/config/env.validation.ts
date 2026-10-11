@@ -195,6 +195,14 @@ export class EnvVars {
   @IsString()
   REALTIME_CORS_ORIGINS?: string;
 
+  // Comma-separated browser origins allowed to call the HTTP API (for example the Expo web dev server at
+  // http://localhost:8081). Native mobile apps send no Origin and need nothing here. Empty = no browser origin
+  // allowed, which is the safe default and what production uses until a web client exists. Exact origins only.
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsString()
+  CORS_ORIGINS?: string;
+
   // --- Business configuration ---
   @Transform(toNumber)
   @IsInt()
@@ -362,6 +370,17 @@ export function crossFieldProblems(env: EnvVars): string[] {
     if (!/^https?:\/\/[^/\s*]+$/.test(origin)) {
       problems.push(
         `REALTIME_CORS_ORIGINS entry "${origin}" must look like https://host[:port] (no path, no wildcard)`,
+      );
+    }
+  }
+
+  for (const origin of (env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)) {
+    if (!/^https?:\/\/[^/\s*]+$/.test(origin)) {
+      problems.push(
+        `CORS_ORIGINS entry "${origin}" must look like https://host[:port] (no path, no wildcard)`,
       );
     }
   }

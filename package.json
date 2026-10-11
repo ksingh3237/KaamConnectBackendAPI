@@ -31,7 +31,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
-    "test:perf": "vitest run --config ./vitest.config.perf.ts"
+    "test:perf": "vitest run --config ./vitest.config.perf.ts",
+    "dev:local": "node scripts/start-local.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1149.0",
