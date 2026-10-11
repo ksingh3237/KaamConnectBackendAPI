@@ -39,10 +39,10 @@ Throttling is the first guard, so a flood of unauthenticated calls never reaches
 
 | # | Risk | Why it matters | Recommendation (needs your approval) |
 |---|---|---|---|
-| T-1 | **Everything is keyed by IP.** Mobile networks in India put many phones behind one public address (carrier-grade NAT), as do shared Wi-Fi networks | Counters are per route, so a busy screen's mix of calls does not add up to one budget. The exposure is on routes one client calls **repeatedly**: for example `PUT /workers/me/location` pings (if the app pings every 5 seconds that is 12 a minute per moving worker, so five workers behind one address reach 60 and the rest see `429`; the ping interval is the frontend's choice; the socket event `location:update` is not throttled, so the app should use it), and the single-route auth limits: `refresh` (60 per 15 min per IP allows about 60 users behind one address, since each refreshes every 15 min) and `otp/request` (20 per hour per IP, which a shop or event where many people sign up on one Wi-Fi could exhaust) | An additive **per-user** layer (built as a separate change, section 1.4) protects against one account (or one botnet rotating IPs) abusing the API, but **does not fix the shared-address case**: that needs the per-IP numbers raised for authenticated traffic, which loosens an existing protection and is therefore your decision, best taken with real traffic data |
+| T-1 | **Everything is keyed by IP.** Mobile networks in India put many phones behind one public address (carrier-grade NAT), as do shared Wi-Fi networks | Counters are per route, so a busy screen's mix of calls does not add up to one budget. The exposure is on routes one client calls **repeatedly**: for example `PUT /workers/me/location` pings (if the app pings every 5 seconds that is 12 a minute per moving worker, so five workers behind one address reach 60 and the rest see `429`; the ping interval is the frontend's choice; the socket event `location:update` is not throttled, so the app should use it), and the single-route auth limits: `refresh` (60 per 15 min per IP allows about 60 users behind one address, since each refreshes every 15 min) and `otp/request` (20 per hour per IP, which a shop or event where many people sign up on one Wi-Fi could exhaust) | An additive **per-user** layer (built as a separate change on the branch `feature/phase-7-per-user-throttling`; reviewed in section 1.5) protects against one account (or one botnet rotating IPs) abusing the API, but **does not fix the shared-address case**: that needs the per-IP numbers raised for authenticated traffic, which loosens an existing protection and is therefore your decision, best taken with real traffic data |
 | T-2 | **`TRUST_PROXY` must match the real hop count.** Too low (0 behind a load balancer): every user appears to be the balancer's address, so the whole user base shares each route's 60/min bucket: an outage that looks like load. Too high: a client can forge `X-Forwarded-For` and dodge limits | Easy to get wrong at first deployment | A release-checklist step (section 2): after deploy, make one call from each of two different networks and confirm the request log shows two different masked client addresses (`ip=` in the log line) |
 | T-3 | **In-memory counters per instance** | With 2+ instances limits multiply and are inconsistent; a restart or deploy resets them (an attacker gains a fresh budget every deploy) | Fine for one instance at launch (D-6). Move storage to Redis with the Phase 8 Redis work, before scaling out |
-| T-4 | **Expensive read routes sit under the generic limit.** Discovery costs about 40 to 60 ms of CPU per call (K-15) and one user may make 60 per minute (per route, per IP) | About 17 users doing that continuously would saturate one core. Unlikely at launch unless the app polls discovery (the frontend should confirm it does not), but nothing stops a script | The per-user layer of section 1.4 can carry a lower limit for `GET /workers` (the mechanism exists; **not enabled**, as it would restrict real users); revisit with real traffic |
+| T-4 | **Expensive read routes sit under the generic limit.** Discovery costs about 40 to 60 ms of CPU per call (K-15) and one user may make 60 per minute (per route, per IP) | About 17 users doing that continuously would saturate one core. Unlikely at launch unless the app polls discovery (the frontend should confirm it does not), but nothing stops a script | The per-user layer (reviewed in section 1.5) can carry a lower limit for `GET /workers` (the mechanism exists; **not enabled**, as it would restrict real users); revisit with real traffic |
 | T-5 | **Socket.IO handshakes are not rate limited by the app** | A flood of connection attempts is refused at the handshake (invalid JWT) but still costs the server a little each | Handle at the edge (load balancer or WAF rate rule) when hosting is chosen; not an application change |
 | T-6 | **No limit on `POST /jobs/:id/payment`, cancel, quote and bill routes beyond the default** | Each is guarded by state and ownership (idempotent payment, state machine), so repeated calls do no harm, only cost | Covered by the generic limit; no change |
 | T-7 | **Clients must back off on `429`** (frontend): the throttler sends a `Retry-After` header (present in the installed `@nestjs/throttler` code) | A client that retries immediately makes a limit worse | Frontend: wait for `Retry-After`; to be added to the frontend gap list |
@@ -131,6 +131,9 @@ migration; the new variable is optional with a safe default. **Rollout suggestio
 request log for `429`s on authenticated routes; a shadow mode that only logs is possible but is not built.
 
 ### 1.6 Shared-address throttling: investigation and proposed limits (**no limit was changed**)
+
+**Decision (2026-10-11): the current limits stay unchanged for now.** The configurable-limits proposal (Stage 1 below) stays
+documented and is **not built**; Stage 2 needs real `429` data first. Nothing in this section has been applied.
 
 **What is established.**
 - Limits are per route and per client address. The installed throttler groups **IPv6 clients by their /64 subnet**
@@ -247,14 +250,18 @@ Facts any image or build script must respect:
 | B-10 | **Restore drill** | Me, once staging exists | The recovery time in the runbook | **Open.** Needs B-1 |
 | B-11 | **`btree_gist` on the production database role** (the scheduling migration creates it) | Me, on the real database | The first production migration | **Open.** CI passed only with a superuser |
 | B-12 | **Frontend work:** back off on `429` using `Retry-After`; single-flight token refresh (K-6); send location through the socket event rather than REST pings; "re-upload required" copy (G-15); show the benchmark rate beside "Total saved" (D-5) | Frontend | A smooth first launch | **Open** |
-| B-13 | **Approvals pending (Milestone B):** final `DELETE /me` design v3 (`08` §1.9); the D-9 migration (`08` §2): review done, awaiting your approval to push and, separately, to apply on dev with a backup; merging the per-user limit (`09` §1.5); `@nestjs/swagger` and the Scarf opt-out (§3.6) | You | Milestone B items | **Open** |
-| B-14 | **Shared-address throttling** (§1.6): approve Stage 1 (configurable sensitive limits at today's values, log analysis); Stage 2 (higher ordinary-route limit for bearer-token requests) only after real `429` data | You | Users behind one IPv4 address (carrier NAT, shared Wi-Fi) seeing `429` at launch events | **Open.** No limit changed; the IPv4 sharing figures are assumptions until traffic exists |
-| B-15 | **OpenAPI response schemas:** all 64 response bodies are interfaces, so the export documents requests only (§3.5) | You (scope), then me | A contract check that covers responses | **Open.** Accepting the gap, or scheduling the conversion of about 25 to 30 response interfaces to classes, is your call |
-| B-16 | **Counsel and operations for deletion requests:** the retention table (`08` §1.6), the statutory time to act, and how a Door B requester is told the outcome before an SMS template exists | You and counsel | Switching `DELETE /me` on in production | **Open** |
+| B-13 | **Approvals pending (Milestone B):** the final `DELETE /me` API and data design v3 (`08` §1.9); the D-9 migration, in three separate steps: push, merge, and apply to dev with a backup (`08` §2.11); merging the per-user limit after PR-1 (`09` §1.5) | You | Milestone B items | **Open** |
+| B-14 | **Shared-address throttling** (§1.6) | You, later | Users behind one IPv4 address (carrier NAT, shared Wi-Fi) seeing `429` at launch events | **Decided: current limits unchanged.** The configurable-limits proposal (Stage 1) is documented and not built; revisit with real `429` data |
+| B-15 | **OpenAPI export** (§3) | Me, when its prerequisites exist | A contract check on the API | **Deferred by decision** until response DTOs (at least 30 named response interfaces plus several inline return types) and bearer authentication can be documented accurately; nothing installed |
+| B-16 | **Deletion requests:** counsel (the retention table in `08` §1.6, bill-item text, the statutory time to act); an **approved outcome mechanism** for Door B requesters (`08` §1.2; no SMS until MSG91 is ready). Door B itself starts with an OTP, so it cannot run in production before the MSG91 sender exists (B-2) | You and counsel | Switching `DELETE /me` on in production | **Open** |
 
 ---
 
 ## 3. OpenAPI export with `@nestjs/swagger`: verified in an isolated copy (nothing installed in the repository)
+
+**Status: DEFERRED by decision (2026-10-11)** until the response bodies and bearer authentication can be documented
+accurately. Nothing has been or will be installed or changed in the repository until then. The findings below are kept
+so the work can resume without repeating the investigation.
 
 **How this was checked.** A copy of the project was made outside the repository (no `.git`, no `.env`) and swagger was
 installed **there**; the repository's `package.json`, lock file and `node_modules` were not touched (its `git status` was
@@ -325,8 +332,15 @@ So a contract check built on this today **would catch** added or removed routes,
 request fields or validators; it **would not catch** a change to a response shape. Documenting responses means converting
 the response interfaces to classes or annotating each route, which is a separate, larger decision.
 
-### 3.6 Decision for you
+### 3.6 What must be true before this resumes
 
-Approve (1) the devDependency and the Scarf opt-out exactly as in 3.2 and 3.3, and (2) the configuration in 3.4 as a
-small first PR (about half a day with tests, including the bearer-security step), accepting the response-body gap for now;
-or leave OpenAPI export out of Milestone B. I installed nothing in the repository and will not until you decide.
+1. **Response bodies documented.** At least 30 named response interfaces (`JobView`, `LeadItem`, `WorkerJobsPage`, `Receipt`, `WorkerCard`, ...,
+   counted from the code) plus several inline return types must become classes, or be annotated by hand, so the schemas are
+   real. Until then the export would be accurate only for requests.
+2. **Bearer authentication declared accurately:** every operation secured except those carrying the existing `@Public`
+   metadata (a small step in the export script), and `uuid` formats on id parameters.
+3. **The Scarf opt-out committed in the same commit as the dependency** (3.3), with the first install run under
+   `SCARF_ANALYTICS=false`.
+4. Then the small first PR of 3.4 with its CI contract step. Estimated effort once 1 and 2 are done: about half a day.
+
+Nothing here needs a decision from you today; it is parked.
