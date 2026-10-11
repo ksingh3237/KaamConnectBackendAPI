@@ -125,3 +125,61 @@ Facts any image or build script must respect:
 | B-11 | **`btree_gist` on the production database role** (the scheduling migration creates it) | Me, on the real database | The first production migration | **Open.** CI passed only with a superuser |
 | B-12 | **Frontend work:** back off on `429` using `Retry-After`; single-flight token refresh (K-6); send location through the socket event rather than REST pings; "re-upload required" copy (G-15); show the benchmark rate beside "Total saved" (D-5) | Frontend | A smooth first launch | **Open** |
 | B-13 | **Approvals pending:** `DELETE /me` final design (`08` §1.9); the D-9 migration on dev (`08` §2); merging per-user throttling (§1.4); `@nestjs/swagger` (§3) | You | Milestone B items | **Open** |
+
+---
+
+## 3. OpenAPI export: `@nestjs/swagger` compatibility report (nothing installed, `package.json` and the lock file untouched)
+
+### 3.1 Versions checked
+
+| Item | Installed here | `@nestjs/swagger` 12.0.2 needs | Fits |
+|---|---|---|---|
+| `@nestjs/common`, `@nestjs/core` | 12.1.2 | `^12.0.0` | yes |
+| `@nestjs/platform-express` (what we use) | 12.1.2 | works with Express; `@fastify/static` is an optional peer we do not need | yes |
+| TypeScript | 6.0.3 | `^5.5.0 \|\| ^6.0.0` (optional peer) | yes |
+| `class-validator` / `class-transformer` | 0.15.1 / 0.5.1 | any (optional peers) | yes |
+| `reflect-metadata` | 0.2.2 | `^0.1.12 \|\| ^0.2.0` | yes |
+| Module format | the project is ESM (`"type": "module"`) | the package is `"type": "module"` with `import`/`require` exports | yes |
+| Node | `engines >=20.19` (local 24.0.0) | `^20.19.0 \|\| >=22.12.0` | yes |
+
+`latest` is 12.0.2; the `next` tag is an alpha and should not be used. Note: the project's `.npmrc` sets
+`legacy-peer-deps`, so npm would not itself report a peer mismatch; the table above is therefore checked by hand.
+
+### 3.2 What installing it would change (an `npm install --dry-run`, run twice; no file was modified)
+
+Adds 7 packages: `@nestjs/swagger` 12.0.2, `@nestjs/mapped-types` 12.0.0, `swagger-ui-dist` 5.33.0 (about 11.9 MB
+unpacked), `js-yaml` 5.4.2, `argparse` 2.0.1, `@microsoft/tsdoc` 0.17.0 and **`@scarf/scarf` 1.4.0**.
+
+- **`@scarf/scarf` is an install-analytics package** (a dependency of `swagger-ui-dist`). I read its script from a
+  downloaded copy without running it: its `postinstall` reports install statistics to a third party unless switched off
+  by `SCARF_ANALYTICS=false`, `DO_NOT_TRACK=1` or `scarfSettings.enabled=false` in `package.json`. For a project that
+  handles Aadhaar images, I would not accept that silently: if you approve the dependency, the opt-out goes into CI and
+  the Dockerfile (or the install uses `--ignore-scripts`, which `postinstall: prisma generate` makes inconvenient).
+- The `EBADENGINE` warnings printed by the dry run are about `@angular-devkit/*` (Nest CLI, a dev tool) and my local
+  Node 24.0.0; they are there today, with or without swagger.
+- Not yet known: whether `npm audit` has findings for the new packages (that is only visible after installing).
+
+### 3.3 What it can and cannot do for this API (important before you approve)
+
+- **Can:** list every route with its method and path (64 handlers), path/query parameters, request bodies from the
+  `class-validator` DTO classes (through the `@nestjs/swagger` compiler plugin, so the DTOs do not need hand-written
+  annotations), the global prefix and the bearer-auth requirement.
+- **Cannot, as the code is written:** describe **response bodies**. They are TypeScript `interface`s (`JobView`,
+  `LeadItem`, `WorkerJobsPage` and so on); the plugin only builds schemas from **classes**. Documenting responses means
+  turning those interfaces into classes or annotating each route by hand, which is the larger part of the work.
+- The plugin runs inside `nest build` (the TypeScript compiler), not under Vitest, so the export is produced from the
+  built output. The export script must start the application, which opens the database: fine in CI (a database is
+  there), but it is not a no-dependency step.
+
+### 3.4 Proposal (needs your approval; nothing is done)
+
+1. `npm install -D @nestjs/swagger@12.0.2` as a **devDependency** with an exact version, as the database packages are
+   pinned. Dev only means the production image never contains `swagger-ui-dist`, and **no documentation endpoint is
+   exposed by the running API**.
+2. The Scarf opt-out as above.
+3. A short spike (about half a day): the plugin in `nest-cli.json`, `scripts/export-openapi.ts`, and a CI step that
+   writes `openapi.json` and fails if it differs from the committed copy ("contract check"). First version covers
+   routes, parameters and request bodies; responses are a follow-up you can schedule.
+4. Document the result in `03-api-spec.md` as generated, not hand-maintained.
+
+Decision for you: **approve the dependency (and the Scarf handling), or leave OpenAPI export out of Milestone B.**

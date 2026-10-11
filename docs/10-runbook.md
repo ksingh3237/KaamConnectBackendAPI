@@ -170,4 +170,11 @@ backup, and keep the statement with the incident notes.
 - Run the restore drill and record the times (section 3.3).
 - Name the on-call person and the SOS receiver, and test the path end to end with a real alert in staging.
 - Decide alert thresholds and where alerts go (nothing exports metrics today).
-- Add the account-deletion and Aadhaar-retention procedures when those features exist.
+- Add the account-deletion and Aadhaar-retention procedures when those features exist. **One step is already
+  known and must not be forgotten:** once `DELETE /me` exists, a restore from an older backup would bring deleted
+  accounts back, so the restore procedure (section 3.2) gets a final step before reopening the application: re-apply
+  every entry of the deletion ledger newer than the backup (design: `08-milestone-b-designs.md` §1.5).
+- Before applying any migration to a real database (the D-9 one is the next candidate): the backup in section 3.1, the
+  row counts, `migrate status` before and after, and the drift check, exactly as in `08` §2.6.
+- Per-user rate limiting exists on a separate branch and is not merged; if it is, `USER_RATE_LIMIT_PER_MIN` is a new
+  setting to record, and a user who reports `429` is looked up by user id in the request log.
