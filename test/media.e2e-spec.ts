@@ -231,6 +231,8 @@ describe('media uploads (e2e, local storage provider)', () => {
       expect(res.headers['content-type']).toBe('image/jpeg');
       expect(res.headers['x-content-type-options']).toBe('nosniff');
       expect(res.headers['cache-control']).toBe('private, no-store');
+      // a web app on another origin (the Expo web dev server) must be allowed to display the picture
+      expect(res.headers['cross-origin-resource-policy']).toBe('cross-origin');
       expect(Buffer.compare(res.body as Buffer, bytes)).toBe(0);
     });
 

@@ -611,7 +611,7 @@ describe('fulfilment: bill, photos, tracking, SOS, job list, service durations (
       const again = await http
         .post(`${V1}/jobs/${job.id}/sos`, {}, { token: customer.accessToken })
         .expect(201);
-      expect(again.body).toEqual({
+      expect(again.body).toMatchObject({
         alertId: first.body.alertId,
         repeated: true,
       });

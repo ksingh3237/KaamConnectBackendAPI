@@ -88,6 +88,25 @@ describe('S3StorageService presigning (offline: signing needs no network)', () =
     expect(await sign(2048)).not.toBe(await sign(4096));
   });
 
+  it('sends a DeleteObject for the right bucket and key, and surfaces real failures', async () => {
+    const service = serviceWith();
+    const send = vi.fn().mockResolvedValue({});
+    (service as unknown as { client: { send: typeof send } }).client.send =
+      send;
+
+    await service.delete('private', KEY);
+    expect(send).toHaveBeenCalledTimes(1);
+    const command = send.mock.calls[0]![0] as {
+      constructor: { name: string };
+      input: { Bucket: string; Key: string };
+    };
+    expect(command.constructor.name).toBe('DeleteObjectCommand');
+    expect(command.input).toEqual({ Bucket: 'kc-private', Key: KEY });
+
+    send.mockRejectedValueOnce(new Error('AccessDenied'));
+    await expect(service.delete('media', KEY)).rejects.toThrow('AccessDenied');
+  });
+
   it('uses path-style URLs for an S3-compatible endpoint such as MinIO', async () => {
     const upload = await serviceWith({
       STORAGE_ENDPOINT: 'http://localhost:9000',

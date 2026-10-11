@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   HeadObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
@@ -90,6 +91,13 @@ export class S3StorageService extends StorageService {
       if (status === 404 || (error as Error).name === 'NotFound') return false;
       throw error;
     }
+  }
+
+  async delete(bucket: StorageBucket, key: string): Promise<void> {
+    // S3 answers 204 for a key that does not exist, so a repeated delete is naturally a success
+    await this.client.send(
+      new DeleteObjectCommand({ Bucket: this.bucketName(bucket), Key: key }),
+    );
   }
 
   private bucketName(bucket: StorageBucket): string {

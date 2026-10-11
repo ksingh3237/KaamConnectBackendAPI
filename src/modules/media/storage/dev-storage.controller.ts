@@ -134,6 +134,9 @@ export class DevStorageController {
     );
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    // helmet's default (same-origin) would stop the Expo web app on another port from showing the picture. The URL is
+    // signed and short-lived, and real S3 links are cross-origin by nature, so this matches production behaviour.
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     await pipeline(createReadStream(file), res);
   }
 

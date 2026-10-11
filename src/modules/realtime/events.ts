@@ -18,6 +18,8 @@ export const RealtimeEvent = {
   BILL_UPDATED: 'bill.updated',
   JOB_REOPENED: 'job.reopened',
   ARRIVAL_CODE_RESET: 'job.arrival_code_reset',
+  SOS_ACKNOWLEDGED: 'sos.acknowledged',
+  SOS_RESOLVED: 'sos.resolved',
 } as const;
 
 /** Shared by lead.new and direct.request. Deliberately contains no address, phone or exact location. */

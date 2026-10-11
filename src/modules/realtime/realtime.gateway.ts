@@ -102,6 +102,16 @@ export class RealtimeGateway
     this.emit(jobRoom(jobId), event, payload);
   }
 
+  disconnectUser(userId: string): void {
+    try {
+      this.server.in(userRoom(userId)).disconnectSockets(true);
+    } catch (error) {
+      this.logger.warn(
+        `disconnect of user sockets failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   // --- Messages from apps ---
 
   /** Start receiving `job.*` events for one job. Allowed for the customer, the assigned or the requested worker. */

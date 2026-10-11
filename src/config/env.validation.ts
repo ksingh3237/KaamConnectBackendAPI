@@ -195,6 +195,22 @@ export class EnvVars {
   @IsString()
   REALTIME_CORS_ORIGINS?: string;
 
+  // Comma-separated browser origins allowed to call the HTTP API (for example the Expo web dev server at
+  // http://localhost:8081). Native mobile apps send no Origin and need nothing here. Empty = no browser origin
+  // allowed, which is the safe default and what production uses until a web client exists. Exact origins only.
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsString()
+  CORS_ORIGINS?: string;
+
+  // File the account-deletion ledger is appended to (one JSON line per deletion: user id and time, nothing else).
+  // The ledger must live OUTSIDE the database and be kept with the backups, so a restore can re-apply deletions
+  // (docs/08 section 1.5). Unset = deletions are only written to the application log (fine for local development).
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsString()
+  DELETION_LEDGER_FILE?: string;
+
   // --- Business configuration ---
   @Transform(toNumber)
   @IsInt()
@@ -362,6 +378,17 @@ export function crossFieldProblems(env: EnvVars): string[] {
     if (!/^https?:\/\/[^/\s*]+$/.test(origin)) {
       problems.push(
         `REALTIME_CORS_ORIGINS entry "${origin}" must look like https://host[:port] (no path, no wildcard)`,
+      );
+    }
+  }
+
+  for (const origin of (env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)) {
+    if (!/^https?:\/\/[^/\s*]+$/.test(origin)) {
+      problems.push(
+        `CORS_ORIGINS entry "${origin}" must look like https://host[:port] (no path, no wildcard)`,
       );
     }
   }

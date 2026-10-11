@@ -140,19 +140,27 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
 
   it('finds the routes it is meant to probe (so the test cannot pass by finding nothing)', () => {
     const protectedRoutes = routes.filter((r) => !r.isPublic);
-    expect(routes.length).toBe(64);
+    expect(routes.length).toBe(73);
     expect(protectedRoutes.length).toBeGreaterThanOrEqual(50);
     expect(
       protectedRoutes
         .filter((r) => r.adminOnly)
         .map((r) => r.template)
         .sort(),
-    ).toEqual([
-      'GET /admin/workers',
-      'PATCH /admin/service-categories/:id/duration',
-      'POST /admin/workers/:id/reject',
-      'POST /admin/workers/:id/verify',
-    ]);
+    ).toEqual(
+      [
+        'GET /admin/workers',
+        'GET /admin/sos',
+        'GET /admin/deletion-requests',
+        'PATCH /admin/service-categories/:id/duration',
+        'POST /admin/workers/:id/reject',
+        'POST /admin/workers/:id/verify',
+        'POST /admin/sos/:id/acknowledge',
+        'POST /admin/sos/:id/resolve',
+        'POST /admin/deletion-requests/:userId/approve',
+        'POST /admin/deletion-requests/:userId/decline',
+      ].sort(),
+    );
     // Public routes (login, refresh, health) are deliberately left alone.
     expect(
       routes
@@ -166,6 +174,8 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
         'POST /auth/otp/request',
         'POST /auth/otp/verify',
         'POST /auth/refresh',
+        // A disabled person cannot hold a session, so asking for deletion must work without one (docs/08 Door B).
+        'POST /auth/deletion-requests',
         // The development stand-in for S3: authorised by a signed URL, not by a login.
         'GET /dev-storage/:bucket/*key',
         'PUT /dev-storage/:bucket/*key',

@@ -12,6 +12,7 @@ import {
 import { AppConfigModule } from './config/app-config.module.js';
 import type { EnvVars } from './config/env.validation.js';
 import { HealthModule } from './health/health.module.js';
+import { AccountModule } from './modules/account/account.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard.js';
@@ -39,6 +40,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     PrismaModule,
     HealthModule,
     AuthModule,
+    AccountModule,
     UsersModule,
     CatalogModule,
     MediaModule,

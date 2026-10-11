@@ -257,6 +257,51 @@ describe('validateEnv', () => {
     });
   });
 
+  describe('browser origins (CORS_ORIGINS)', () => {
+    const base = { ...SECRETS, DATABASE_URL: DEV_URL };
+
+    it('is off by default: no browser origin is allowed', () => {
+      expect(validateEnv(base).CORS_ORIGINS).toBeUndefined();
+      expect(
+        validateEnv({ ...base, CORS_ORIGINS: '' }).CORS_ORIGINS,
+      ).toBeUndefined();
+    });
+
+    it('accepts exact origins, with ports, separated by commas', () => {
+      const env = validateEnv({
+        ...base,
+        CORS_ORIGINS: 'http://localhost:8081, https://app.example.com',
+      });
+      expect(env.CORS_ORIGINS).toBe(
+        'http://localhost:8081, https://app.example.com',
+      );
+    });
+
+    it.each([
+      '*',
+      'http://*.example.com',
+      'https://example.com/app',
+      'localhost:8081',
+      'ftp://example.com',
+    ])('refuses %s (no wildcards, no paths, http(s) only)', (bad) => {
+      expect(() => validateEnv({ ...base, CORS_ORIGINS: bad })).toThrow(
+        /CORS_ORIGINS entry/,
+      );
+    });
+
+    it('is allowed in production only as an explicit list, and a wildcard is still refused there', () => {
+      expect(() =>
+        validateEnv({
+          ...productionEnv,
+          CORS_ORIGINS: 'https://app.example.com',
+        }),
+      ).not.toThrow();
+      expect(() =>
+        validateEnv({ ...productionEnv, CORS_ORIGINS: '*' }),
+      ).toThrow(/CORS_ORIGINS entry/);
+    });
+  });
+
   describe('test database safety', () => {
     it('accepts a *_test database', () => {
       expect(

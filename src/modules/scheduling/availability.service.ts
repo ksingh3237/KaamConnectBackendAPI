@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { pointOf } from '../../common/utils/geo.js';
 import type { EnvVars } from '../../config/env.validation.js';
 import type { Prisma } from '../../generated/prisma/client.js';
+import { VerificationStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   OCCUPYING_STATUSES,
@@ -213,6 +214,31 @@ export class AvailabilityService {
   ): Promise<BookedWindow> {
     // $executeRaw: pg_advisory_xact_lock returns `void`, which $queryRaw cannot deserialise.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`booking:${workerId}`}))`;
+
+    // Account deletion takes this same lock before it anonymises a worker. A request that waited here while that
+    // happened must not hand the job to a worker who is gone, so look again now that nobody else can change them.
+    const owner = await tx.workerProfile.findUnique({
+      where: { userId: workerId },
+      select: {
+        verificationStatus: true,
+        user: { select: { isActive: true } },
+      },
+    });
+    if (
+      owner?.verificationStatus !== VerificationStatus.VERIFIED ||
+      !owner.user.isActive
+    ) {
+      const gone: Availability = {
+        free: false,
+        etaOptions: null,
+        reason: null,
+        nextFreeAt: null,
+        conflicts: [],
+      };
+      throw side === 'customer'
+        ? workerUnavailable(gone)
+        : scheduleConflict(gone);
+    }
 
     const slots = await this.slotsOf(workerId, tx, job.id);
     const availability = this.assess(slots, job, now, etaMinutes);
