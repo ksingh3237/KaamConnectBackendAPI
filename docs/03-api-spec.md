@@ -541,6 +541,7 @@ Everything is under `/api/v1`. **Who may call what is decided by owning the job*
 | Method & path | Who | Notes |
 |---|---|---|
 | `POST /jobs/:id/arrival` `{code}` | assigned worker, job ASSIGNED | `code` = exactly 4 digits. Right → `200`, job ARRIVED (worker's job view). Wrong → `422 ARRIVAL_CODE_INVALID` with how many tries are left; the 5th wrong try and everything after → `429 CODE_LOCKED` (even the right code). A right code on the 5th try still works. `409 WORKER_BUSY` if the worker is already on site at another job (that refusal does not use up a try). Early arrival (before the booked time) is allowed |
+| `POST /jobs/:id/arrival-code/reset` (no body) | the job's customer, job ASSIGNED | **Arrival-code recovery.** Issues a NEW random 4-digit code (never equal to the old one), sets the wrong-try counter back to 0, and the old code stops working at once. Returns the customer's job view with the new `arrivalCode`. Works whether or not the job is locked (a customer who misread the code can use it too). **Limits, enforced inside the one database update:** at most **3** resets per assignment and at least **60 s** apart; `429 RESET_COOLDOWN` (`details[0] = {field:"retryAfterSec"}`) or `429 RESET_LIMIT`. Any other state: `409 INVALID_TRANSITION`. A worker, a stranger or an unknown id gets `403` / `404`. Per-address backstop: 20 calls per hour. Every use and every refusal is written to the audit table (§11.9). The worker gets the push `job.arrival_code_reset` (no code in it) |
 | `PUT /jobs/:id/bill-items` `{items:[{kind,description,amount}]}` | assigned worker, job ARRIVED | **Replaces** the worker's items. `kind` ∈ PARTS, LABOUR, OTHER; `description` 1–120; `amount` whole ₹1–100,000; at most 20 items; `[]` clears. The visit-fee line is untouched. Returns the bill. `bill.updated` goes to the customer |
 | `GET /jobs/:id/bill` | the customer or the assigned worker | `{jobId, status, items[{id,kind,description,amount}], platformFee:0, total, approved, payTo:{name, upiId}}`. `409 BILL_NOT_AVAILABLE` until a worker is chosen |
 | `POST /jobs/:id/bill/approve` `{expectedTotal}` | job's customer, job ARRIVED | The customer approves the total **they were shown**. If the bill has changed: `409 BILL_CHANGED` and nothing happens. Success → IN_PROGRESS and the items freeze (a later edit is `409`). *This differs from the first draft, which had no body* |
@@ -590,12 +591,13 @@ The backed-out worker's response is the job view **without the address**. An ass
 | `job.reopened` | the customer | `{jobId, reason:"WORKER_BACKED_OUT"}` |
 | `location.refresh` | the worker | `{reason:"JOB_ENDED", jobId}` (also in §10.7) |
 | `job.status` | as before | now also ARRIVED, IN_PROGRESS, WORK_COMPLETED, COMPLETED |
+| `job.arrival_code_reset` | the assigned worker | `{jobId}` only: the worker must ask the customer for the new code. The code is never pushed |
 
 `sos.acknowledged` from the first draft is **not built** (there is no acknowledge endpoint yet).
 
 ### 11.6 SOS delivery
 
-The alert is stored first (`sos_alerts`, status OPEN), then sent through the safety channel: `SOS_WEBHOOK_URL` (JSON `POST`, 5 s timeout, no retry) or, if it is not set (development only), the application log. **Production refuses to start without an https `SOS_WEBHOOK_URL`.** If the channel fails the request still succeeds (`201`) and an error is logged. The payload carries: alert id, job reference and status, who raised it with name and phone, the other person, the job's address (where help goes, so the channel must be private) and a location labelled `REPORTED` (sent with the alert), `LAST_WORKER_FIX` (the worker's latest stored fix, with its age) or `null` (unknown).
+The alert is stored first (`sos_alerts`, status OPEN), then sent through the safety channel: `SOS_WEBHOOK_URL` (JSON `POST`, 5 s timeout, no retry) or, if it is not set (development only), the application log. **Production refuses to start without an https `SOS_WEBHOOK_URL`.** The receiver, the people behind it and the delivery guarantees are **not decided**; the agreed requirements are in `05-security-testing.md §11`. If the channel fails the request still succeeds (`201`) and an error is logged. The payload carries: alert id, job reference and status, who raised it with name and phone, the other person, the job's address (where help goes, so the channel must be private) and a location labelled `REPORTED` (sent with the alert), `LAST_WORKER_FIX` (the worker's latest stored fix, with its age) or `null` (unknown).
 
 ### 11.7 New error codes
 
@@ -604,6 +606,8 @@ The alert is stored first (`sos_alerts`, status OPEN), then sent through the saf
 | 422 | `ARRIVAL_CODE_INVALID` | Wrong arrival code; `details` says how many tries are left |
 | 429 | `CODE_LOCKED` | Five wrong codes; the job cannot be arrived at with a code any more |
 | 409 | `WORKER_BUSY` | The worker is already on site at another job |
+| 429 | `RESET_COOLDOWN` | A new arrival code was issued less than 60 s ago; `details` has `retryAfterSec` |
+| 429 | `RESET_LIMIT` | Three new codes were already issued for this assignment; only cancel or the worker backing out remain |
 | 409 | `BILL_CHANGED` | The bill changed since the customer last looked; `details` gives the current total |
 | 409 | `BILL_NOT_AVAILABLE` · `RECEIPT_NOT_AVAILABLE` · `TRACKING_NOT_AVAILABLE` · `SOS_NOT_AVAILABLE` | Asked at a stage where it does not exist yet / any more |
 | 409 | `PHOTO_LIMIT` | Already five photos of that kind |
@@ -613,3 +617,44 @@ The alert is stored first (`sos_alerts`, status OPEN), then sent through the saf
 ### 11.8 What the app must do
 
 Show the arrival code to the customer and a code box to the worker (with the tries left); a bill screen where the worker edits and the customer approves the **total shown** (send `expectedTotal`; handle `BILL_CHANGED` by re-fetching); payment and receipt screens; the live map from `GET …/tracking` then `job.location`, **drawing no distance when it is `null`**; the worker app sends `location:update` while on the way and answers `location.refresh` with a fix; handle `job.reopened` (back to "waiting for quotes") and a worker-side "back out" button; an SOS button; the worker's Activity from `GET /workers/me/jobs`.
+
+### 11.9 Arrival-code recovery: behaviour and what it means for a lock
+
+- **Before:** five wrong codes locked the assignment, and the only exits were the worker backing out or the customer cancelling.
+- **Now:** the customer can issue a new code (`POST /jobs/:id/arrival-code/reset`). A locked worker is unlocked at once.
+- **Guessing stays bounded:** a worker gets 5 tries per code and the customer can issue at most 3 new codes, so one assignment allows at most 5 x 4 = **20 guesses out of 10,000 (0.2 %)**.
+- **After the third reset** the customer cannot reset again, however long they wait. If the worker locks that code too, the only exits are the customer cancelling or the worker backing out. This is deliberate: the cap is what keeps the guess budget small.
+- **A new assignment starts clean:** when the worker backs out, the reset counter and cooldown are cleared along with the code.
+- **App contract:** the customer's job view carries `arrivalLocked` and `arrivalResetsLeft` (while ASSIGNED); the worker's view carries `arrivalLocked`. Show "ask the customer for a new code" to a locked worker, and an "issue a new code" action to the customer (hidden when `arrivalResetsLeft` is 0).
+- **Audit trail** (table `job_security_events`, append-only, never contains a code): `ARRIVAL_LOCKED` (actor = the worker, written when the fifth wrong code is entered), `ARRIVAL_CODE_RESET` (actor = the customer; written in the same transaction as the change), `ARRIVAL_RESET_REFUSED` (detail `LIMIT` or `COOLDOWN`; at most one row per job per minute so repeated taps cannot flood it). Each row records the caller's IP address. No endpoint reads the table yet; it is for support and investigation.
+
+## 12. Reviews, activity extras, earnings and savings contract (built in Phase 6)
+
+No database migration was needed: the `reviews` table, the worker's `rating_sum` / `review_count` and their CHECK constraints already existed from the baseline.
+
+### 12.1 Routes
+
+| Method & path | Who | Notes |
+|---|---|---|
+| `POST /jobs/:id/review` `{rating, tags?, tipAmount?}` | the job's customer, job COMPLETED (payment recorded) | `rating` integer 1–5 (required); `tags` any of PUNCTUAL, FAIR_PRICE, CLEAN_WORK, POLITE, EXPERT_SKILL, each at most once (default none); `tipAmount` whole ₹0–5000 (default 0), **recorded only**: the tip is paid to the worker directly and is not part of the bill, the payment or the earnings (Q-8). There is no free-text comment; unknown fields are rejected. `201 {id, jobId, rating, tags, tipAmount, createdAt, worker:{id, rating, reviewsCount}}`. `409 ALREADY_REVIEWED` (a review is final; there is no edit), `409 REVIEW_NOT_ALLOWED` before COMPLETED or if cancelled, `404` for anyone but the job's customer (including the job's own worker), `403` if the caller has no customer profile |
+| `GET /workers/me/earnings?period=today\|week\|month` | any worker profile (verification not required) | `{period, from, to, timezone:"Asia/Kolkata", amount, jobsDone, platformFee:0, currency:"INR"}`. Default `today`. `amount` = sum of the bills of jobs that reached COMPLETED inside the period, by the time the payment was recorded. `from`/`to` is the half-open range counted, in UTC. Days are Asia/Kolkata days (midnight IST); weeks start Monday; months start on the 1st. Tips are not included |
+| `GET /me/savings?role=customer\|worker` | any signed-in user | `{commissionSaved, benchmarkRate, currency:"INR", role, jobsCount, jobsTotal}`. `commissionSaved` = `jobsTotal` x `benchmarkRate`, rounded to whole rupees (half up); `jobsTotal` = paid bills of the caller's COMPLETED jobs as customer or as worker. `benchmarkRate` is `COMMISSION_BENCHMARK_RATE` (default 0.20, decision D-5) and must be disclosed in the app: this is a comparison with a competitor's commission, not money the platform holds. Without `role`: the customer side if the user has a customer profile, else the worker side. A user with no jobs gets zeros |
+| `GET /workers/:id` | customer | now also `reviews: {rating, reviewsCount, distribution:{"1".."5"}, latest:[{rating, tags, createdAt}]}` with the ten newest, **without any reviewer identity** |
+
+### 12.2 Fields added to existing responses
+
+| Where | Field | Meaning |
+|---|---|---|
+| `GET /customers/me/jobs`, COMPLETED rows | `rating` (1–5 or `null`), `reviewed` (boolean) | "Rated 5.0" on the row; `reviewed:false` means offer the review screen. Absent on other tabs |
+| `GET /workers/me/jobs`, COMPLETED rows | `rating` (1–5 or `null`) | what the customer gave |
+| `GET /jobs/:id`, COMPLETED | `review` (`{id, jobId, rating, tags, tipAmount, createdAt}` or `null`); customer view also `canReview` | the customer and the job's worker see the review; nobody else can see the job |
+
+### 12.3 Rules
+
+- **Once, by the owner, after payment** (BR-10): enforced by the ownership query (404 otherwise), the status check and a unique index on `reviews.job_id`.
+- **Totals never lose a count:** the review row and the worker's running totals change in one transaction using `SET x = x + n`; ten simultaneous taps on one job produce exactly one review, and twelve customers rating one worker at once produce exactly twelve counted ratings.
+- **The average** is `rating_sum / review_count`, one decimal, `null` before the first review.
+
+### 12.4 What the app must do
+
+Offer the review screen when a COMPLETED job has `canReview: true`; send `rating` (default 5), the chosen `tags` and the optional tip; show "Rated x.x" from `rating`; show the worker's `reviews` summary on the profile; show "earned today" from `/workers/me/earnings` and disclose `benchmarkRate` next to "Total saved".

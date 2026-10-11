@@ -169,7 +169,7 @@ Tests: `test/phase5-requirements.e2e-spec.ts` (27), `test/fulfilment.e2e-spec.ts
 |---|---|---|
 | Ownership decides access, verification does not (D-8) | queries in `fulfilment/*`, `@RequireProfile('worker')` | a PENDING or REJECTED worker completes the whole journey; a stranger gets 404 on 9 routes; the job's own customer acting through a worker profile gets 404; an access matrix over all 11 routes (anonymous 401, outsider 404, unknown id 404, nothing changed) |
 | Only the customer approves and pays | `@RequireProfile('customer')` + `customerId` in the query | assigned worker 403, stranger customer 404, a person with both profiles 404; no payment row created |
-| Arrival code | `arrival.service.ts` | constant-time compare; the code is never in the worker's views or events; 4 wrong then the right one works; 5 wrong lock; 10 parallel wrong guesses ≤ 4 refusals and exactly 5 attempts stored |
+| Arrival code (see §10 for recovery) | `arrival.service.ts` | constant-time compare; the code is never in the worker's views or events; 4 wrong then the right one works; 5 wrong lock; 10 parallel wrong guesses ≤ 4 refusals and exactly 5 attempts stored |
 | One job on site | friendly check + `jobs_one_in_progress_per_worker` | refused without using a try; two simultaneous arrivals give exactly `[200, 409]`; the real database error is recognised by the same detector |
 | Bill integrity | `bill.service.ts` | replace-not-append; frozen after approval; `expectedTotal` required; an edit racing an approval cannot both succeed; the visit fee survives every edit; 9 invalid item shapes rejected |
 | Money | `payment.service.ts` | amount never taken from the app; idempotent; 10 simultaneous taps → one `payments` row; receipt total = Σ items, platform fee 0, no address/phone |
@@ -191,3 +191,55 @@ Tests: `test/phase5-requirements.e2e-spec.ts` (27), `test/fulfilment.e2e-spec.ts
 - The first run of the new suite had two failures, both in my test set-up (a worker cannot take two overlapping immediate jobs, which is the scheduling rule working), not in the product.
 
 **Not tested, honestly:** the webhook against a real receiver; GitHub CI; behaviour under a real multi-instance deployment (still single instance).
+
+## 10. Arrival-code recovery and Phase 6: controls and how they are tested
+
+Files: `test/arrival-code-reset.e2e-spec.ts` (12 tests), `arrival-code-reset.service.spec.ts` (5), `test/phase6.e2e-spec.ts` (22), `earnings/ist-time.spec.ts` (4), `earnings/earnings.service.spec.ts` (3).
+
+### 10.1 Arrival-code reset
+
+| Control | Where | Test |
+|---|---|---|
+| Authorization: only the job's own customer | `customerId` in the conditional `UPDATE`; `@RequireProfile('customer')` | no token 401; a worker 403; a stranger and an unknown id 404; the job's own worker, even holding a customer profile, 404; nothing changes and nothing is audited |
+| Only while the worker is on the way | `status = 'ASSIGNED'` in the same `UPDATE` | OPEN, on-site and cancelled jobs 409; code and counter unchanged |
+| Cap: 3 per assignment, however long the wait | `arrival_code_resets < 3` in the same `UPDATE` | the 4th is `429 RESET_LIMIT` after the cooldown was skipped; the counter stays 3; at the cap a locked worker is stuck on this assignment but can still back out |
+| Cooldown: 60 s | `arrival_code_reset_at` in the same `UPDATE` | a second tap is `429 RESET_COOLDOWN` with `retryAfterSec` 1-60; five simultaneous taps give exactly one 200 and one counted reset |
+| A reset racing a guess | one conditional `UPDATE` per side | eight parallel wrong guesses plus a reset: the reset succeeds, the counter ends at most 5, the job stays ASSIGNED |
+| New code differs; old code dies; counter restarts | `arrival_code IS DISTINCT FROM` the new one; `arrival_attempts = 0` | the old code is then a normal 422 (not locked); the new code arrives the worker |
+| Guess budget stays bounded | cap x tries | 5 tries x (1 + 3 resets) = 20 guesses of 10,000 per assignment (0.2 %) |
+| Audit trail without secrets | `job_security_events` (append-only) | `ARRIVAL_LOCKED` (worker), `ARRIVAL_CODE_RESET` (customer, same transaction), `ARRIVAL_RESET_REFUSED` (deduplicated to one per minute); the table has no column that can hold a code; neither code appears in the dump of the rows |
+| The code is never pushed | `job.arrival_code_reset` carries only `{jobId}` | the pushed events never contain the new code |
+| A new assignment starts clean | worker back-out clears the counters | after back-out the job is OPEN with counter 0 and no cooldown, and the audit rows remain |
+| Per-address backstop | `@Throttle` 20 / hour on the route | not separately tested (the per-job limits are the real control) |
+
+**Lockout implications.** A worker who fills the five tries is locked until the customer issues a new code. The customer can do that three times per assignment. If the third code is also locked, the only exits are the customer cancelling or the worker backing out. A customer who never opens the app can leave a worker locked; the worker can back out. There is deliberately no time-based unlock and no worker-side or admin-side unlock.
+
+### 10.2 Reviews, earnings, savings (Phase 6)
+
+| Control | Where | Test |
+|---|---|---|
+| Review: owner only, once, after payment | ownership in the query; status check; unique index `reviews_job_id_key` | stranger / the job's own worker / unknown id 404; worker without a customer profile 403; OPEN, WORK_COMPLETED and CANCELLED 409; second review 409 and totals unchanged; ten simultaneous taps give one review |
+| No lost ratings | one transaction; `SET x = x + n` | twelve customers rate one worker at once: all counted, and `rating_sum` / `review_count` equal the sum and count of the rows |
+| Input | `CreateReviewDto` | 12 invalid bodies are 422 (rating 0/6/4.5/text, unknown or duplicate tag, negative/over-5000/fractional tip, a free-text comment); nothing stored; the edge values 1, all five tags and a 5000 tip are accepted |
+| Tip is record-only | not in `payments` or earnings | the payment amount and the worker's earnings are unchanged by a tip |
+| Reviewer privacy | `WorkerReviewSummary` | the public summary has exactly `rating`, `tags`, `createdAt` per entry: no name, no id |
+| Earnings | `EarningsService` | only this worker's COMPLETED jobs inside the IST period; a stray payment on a not-completed job does not count (mutation-checked); a payment 1 ms before midnight IST belongs to yesterday, one exactly at midnight to today; week starts Monday; verification not required; customer 403 |
+| Savings | `EarningsService.savings` | only the caller's own COMPLETED jobs, as customer or as worker; tips excluded; default role customer; rate disclosed |
+| Day boundaries | `istRange` | unit tests around 23:59:59.999 / 00:00 IST, Sunday night to Monday, month end, December |
+
+Mutation checks run on 2026-10-11: removing the reset cap, the cooldown or the owner check, and for Phase 6 removing the review ownership check, the totals update, the IST offset and the COMPLETED filter in earnings and in savings, each made at least one test fail; the code was restored each time.
+
+## 11. SOS delivery: agreed requirements (nothing below is built or enabled)
+
+**Status:** pending your decisions. No receiver has been chosen, no on-call person has been named, and no vendor is selected here. Production SOS stays disabled: the application refuses to start in production without an https `SOS_WEBHOOK_URL`, and real delivery has never been tested against a real receiver. These are the requirements agreed so far; each must be met before SOS is enabled.
+
+| Area | Requirement |
+|---|---|
+| **Receiver and people** | A receiver that can page a human and record an acknowledgement is **to be chosen** (a paging service, a chat channel as a secondary copy only, or a duty phone). A **named primary and backup on-call person**, 24/7 including holidays, and an **escalation policy** (who is called when an alert is not acknowledged, and after how long) are **to be decided** and written into a runbook. Nothing in this repository names them |
+| **Runbook** | Who calls the customer and the worker, when to contact emergency services, who owns follow-up, and how an alert is closed |
+| **Acknowledgement** | Two levels: the receiver acknowledging that a person has the alert, and the platform recording the outcome through an admin route (`PATCH /admin/sos/:id`) that also notifies the person who raised it with `sos.acknowledged`. Neither exists yet. A 2xx from the receiver alone means only "received" |
+| **Retry handling** | Delivery state kept with the alert (status, attempts, next attempt, last error, never the payload); a sweeper that is safe across instances; backoff of 30 s, 1 min, 2 min, 5 min, then every 10 min for about an hour; retry on network errors, timeouts, 5xx and 429; any other 4xx is a permanent failure; the alert id is the idempotency key so the receiver can de-duplicate. Needs a migration, to be reviewed first |
+| **Failure visibility** | The alert is always stored first and the SOS request never fails because of the receiver. When retries run out the alert is marked as failed delivery and logged at error level. An admin view lists alerts that are undelivered or unacknowledged for too long; an optional second channel is used if the first fails. The app must still show an emergency-number fallback (frontend work) |
+| **Data minimisation** | Send the receiver the least it needs: alert id, job reference, who raised it, the phone numbers, a location label and a link to a protected admin page for the address. Do not put the full address and other personal data in a third-party service by default. Never log the full payload |
+| **Secrets and authenticity** | Receiver keys and the request-signing secret come only from environment variables or a secrets manager, never from the repository; production requires the signing secret; each request carries a timestamp and an HMAC signature so the receiver can reject forged or replayed alerts |
+| **Verification** | Mock-receiver tests (200, 500, timeout, 4xx, slow) prove our behaviour but not real delivery. Real delivery is claimed only after a **clearly labelled test alert with fake data** reaches a receiver you own and authorise, and is then repeated on a schedule |

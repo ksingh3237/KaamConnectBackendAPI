@@ -74,14 +74,27 @@ Realistic range assumes answers to the open questions arrive in week 1. Add ~20 
 | Stale GPS (> 2 min) flagged in tracking | **Met**; a fix older than 30 min also loses its distance |
 | SOS persists and notifies the configured channel | **Met against a recording notifier and a mocked webhook client**; **not** tried against a real receiver |
 | Distances only from real coordinates | **Met**: `null` plus `distanceBasis` when the job or area has none (K-26) |
-**Verified on GitHub (2026-10-11):** the CI workflow ran on PR #1 (branch `feature/backend-phases-0-5`) and succeeded, including the `btree_gist` step and the built-app smoke test. **Not verified:** the idle-machine benchmark (pending by instruction), real SOS delivery to a receiver, and real S3.
+**Verified on GitHub (2026-10-11):** the CI workflow ran on PR #1 (branch `feature/backend-phases-0-5`) and succeeded, and again on the push to `main` after PR #1 was merged (2026-10-11), also succeeding, including the `btree_gist` step and the built-app smoke test. **Not verified:** the idle-machine benchmark (pending by instruction), real SOS delivery to a receiver, and real S3.
 **Not built (documented):** worker payment confirmation, admin SOS acknowledge and `sos.acknowledged`, PDF receipts, retry for the SOS webhook. See `progress.md` §3.2 and K-27 to K-31.
 **Also built:** `job.location`, `bill.updated`, `job.reopened` events and the `location:update` socket event (throttled to one stored fix per 3 s). **Risks that remain:** ETA quality without a routing provider (straight line x speed); payment honesty (customer self-reports).
 
-## Phase 6 — Reviews, activity, earnings, savings (3–4 d)
+## Phase 6 — Reviews, activity, earnings, savings (3–4 d) — **DONE 2026-10-11 (tested locally; not yet through CI)**
 **Endpoints:** `POST /jobs/:id/review`, `GET /me/savings`, `GET /workers/me/earnings`, worker activity list, `GET /workers/:id` review summary.
 **Acceptance:** review once per completed job by owner only; aggregates update atomically (concurrent reviews don't lose counts); activity tab counts match lists; IST day boundary tested around midnight.
 **Note (D-5):** benchmark rate is config (default 20 %); `GET /me/savings` returns `benchmarkRate` so the app can disclose the basis.
+**Delivered:** `POST /jobs/:id/review` (1-5 stars, five tags, tip 0-5000 recorded only; once, by the job's customer, after payment), `GET /workers/me/earnings?period=today|week|month` (Asia/Kolkata days), `GET /me/savings`, the review summary on `GET /workers/:id`, and `rating` / `reviewed` / `review` / `canReview` on the activity rows and the job. **No migration** (the table, counters and CHECKs existed). Contract: `03-api-spec.md §12`; controls and tests: `05-security-testing.md §10.2`.
+
+| Acceptance | Status |
+|---|---|
+| Review once per completed job, by the owner only | **Met**: stranger, the job's own worker, unknown id 404; second review 409; ten simultaneous taps give one review |
+| Aggregates update atomically (concurrent reviews do not lose counts) | **Met**: twelve customers rate one worker at once, all counted; totals equal the sum and count of the rows; mutation-checked |
+| Activity tab counts match the lists | **Met** for the customer and the worker, across all three tabs |
+| IST day boundary around midnight | **Met**: unit tests at 23:59:59.999 / 00:00 IST, Sunday night, month end and December; an e2e test puts payments 1 ms either side of midnight IST |
+
+**Not verified:** CI on this work (its result is on the new pull request, not recorded here), the idle-machine benchmark, and CI on the extended smoke test. **Verified:** the built-app smoke test, extended with the arrival-code reset, a review, earnings and savings, passed on 2026-10-11 against the dev database carrying the new migration. **Not built:** editing or removing a review, admin moderation, a worker-side list of their own reviews, tips in earnings.
+
+### Arrival-code recovery (approved 2026-10-11; built in the same session as Phase 6)
+`POST /jobs/:id/arrival-code/reset` (customer only, job ASSIGNED): a new random code, tries back to zero, **3 per assignment, 60 s apart**, enforced in one conditional `UPDATE`; append-only audit table `job_security_events` (lock, reset, refused reset; never a code); `job.arrival_code_reset` push without the code; `arrivalLocked` / `arrivalResetsLeft` in the job views. Guess budget stays at 20 of 10,000 per assignment. Migration `20261011150000_arrival_code_reset` was applied to the test database and, on 2026-10-11 after a verified backup and your review, to the **development** database (not elsewhere); the built-app smoke test passed against it. Tests: 12 e2e + 5 unit; the cap, cooldown and ownership were each removed to prove a test fails. Contract: `03-api-spec.md §11.9`.
 
 ## Phase 7 — Hardening & release (4–5 d)
 **Work:** IDOR matrix tests, throttling tuning, load smoke, `EXPLAIN` review, OpenAPI export + contract check, Dockerfile/Procfile (per host decision), production env checklist, backup/restore drill, runbook, `DELETE /me` account deletion if approved (Q-17), dependency audit.
