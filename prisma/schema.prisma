@@ -107,6 +107,12 @@ enum ReviewTag {
   EXPERT_SKILL
 }
 
+enum JobSecurityEventType {
+  ARRIVAL_LOCKED // five wrong arrival codes; actor = the worker
+  ARRIVAL_CODE_RESET // the customer issued a new code; actor = the customer
+  ARRIVAL_RESET_REFUSED // a reset was refused (detail LIMIT or COOLDOWN); actor = the customer
+}
+
 enum SosStatus {
   OPEN
   ACKNOWLEDGED
@@ -128,6 +134,7 @@ model User {
   worker        WorkerProfile?
   refreshTokens RefreshToken[]
   sosAlerts     SosAlert[]
+  securityEvents JobSecurityEvent[]
 
   @@map("users")
 }
@@ -350,6 +357,8 @@ model Job {
   acceptedOfferId String?     @unique @map("accepted_offer_id") @db.Uuid
   arrivalCode     String?     @map("arrival_code") @db.VarChar(4)
   arrivalAttempts Int         @default(0) @map("arrival_attempts")
+  arrivalCodeResets  Int          @default(0) @map("arrival_code_resets") // customer resets used for this assignment; CHECK >= 0, capped in code (MAX_ARRIVAL_CODE_RESETS)
+  arrivalCodeResetAt DateTime?    @map("arrival_code_reset_at") @db.Timestamptz(3) // last reset, for the cooldown
   expiresAt       DateTime?   @map("expires_at") @db.Timestamptz(3) // OPEN jobs auto-cancel (ASSUMPTION A-9)
   assignedAt      DateTime?   @map("assigned_at") @db.Timestamptz(3)
   arrivedAt       DateTime?   @map("arrived_at") @db.Timestamptz(3)
@@ -375,6 +384,7 @@ model Job {
   review        Review?
   sosAlerts     SosAlert[]
   workerLeads   WorkerLead[]
+  securityEvents JobSecurityEvent[]
 
   // Hand-written in the scheduling migration (Prisma cannot express them), keep them there:
   //  - jobs_worker_no_overlap: EXCLUDE USING gist (worker_id =, tstzrange(booked_start_at, booked_end_at) &&)
@@ -404,6 +414,24 @@ model WorkerLead {
   @@id([jobId, workerId])
   @@index([workerId, deliveredAt])
   @@map("worker_leads")
+}
+
+// Append-only audit trail of security-relevant things that happen to a job (arrival-code lock and reset).
+// It never stores code values. Rows are never updated or deleted by the application.
+model JobSecurityEvent {
+  id        String               @id @default(uuid(7)) @db.Uuid
+  jobId     String               @map("job_id") @db.Uuid
+  actorId   String?              @map("actor_id") @db.Uuid
+  type      JobSecurityEventType
+  detail    String?              @db.VarChar(40) // e.g. LIMIT or COOLDOWN for a refused reset
+  ip        String?              @db.VarChar(45)
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  job   Job   @relation(fields: [jobId], references: [id])
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([jobId, createdAt])
+  @@map("job_security_events")
 }
 
 model JobMedia {
