@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   Param,
   ParseUUIDPipe,
@@ -12,7 +13,11 @@ import {
 } from '../../common/decorators/current-user.decorator.js';
 import { SkipUserThrottle } from '../../common/throttle/user-throttle.decorator.js';
 import { SosDto } from '../fulfilment/dto/fulfilment.dto.js';
-import { SosService } from './sos.service.js';
+import {
+  SosService,
+  type SosRaised,
+  type SosStatusView,
+} from './sos.service.js';
 
 /** Open to the customer and the assigned worker of the job; ownership is checked in the service. */
 @Controller('jobs/:id/sos')
@@ -27,7 +32,16 @@ export class SafetyController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SosDto,
-  ): Promise<{ alertId: string; repeated: boolean }> {
+  ): Promise<SosRaised> {
     return this.sos.raise(user.id, id, dto);
+  }
+
+  /** Where the caller's own alerts on this job stand: sent, received by the desk, acknowledged, resolved. */
+  @Get()
+  status(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<SosStatusView[]> {
+    return this.sos.statusFor(user.id, id);
   }
 }

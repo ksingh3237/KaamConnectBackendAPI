@@ -32,7 +32,8 @@
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
     "test:perf": "vitest run --config ./vitest.config.perf.ts",
-    "dev:local": "node scripts/start-local.mjs"
+    "dev:local": "node scripts/start-local.mjs",
+    "mock:sos": "node scripts/mock-sos-receiver.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1149.0",

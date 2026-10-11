@@ -127,6 +127,8 @@ model User {
   language  Language @default(en)
   isAdmin   Boolean  @default(false) @map("is_admin") // ASSUMPTION A-7: minimal worker-verification admin
   isActive  Boolean  @default(true) @map("is_active")
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3)            // set once the account has been anonymised (docs/08 s1); never cleared
+  deletionRequestedAt DateTime? @map("deletion_requested_at") @db.Timestamptz(3) // a disabled person asked for deletion; waits for an admin
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -134,9 +136,13 @@ model User {
   worker        WorkerProfile?   @relation("WorkerUser")
   reviewedWorkers WorkerProfile[] @relation("WorkerReviewer")
   refreshTokens RefreshToken[]
-  sosAlerts     SosAlert[]
+  sosAlerts     SosAlert[] @relation("SosRaiser")
+  acknowledgedSos SosAlert[] @relation("SosAcknowledger")
+  resolvedSos     SosAlert[] @relation("SosResolver")
   securityEvents JobSecurityEvent[]
 
+  // Hand-written in the account_deletion_and_sos_delivery migration (Prisma cannot express it), keep it there:
+  //  - users_deletion_requested_idx: (deletion_requested_at) WHERE deletion_requested_at IS NOT NULL AND deleted_at IS NULL
   @@map("users")
 }
 
@@ -532,9 +538,26 @@ model SosAlert {
   status    SosStatus @default(OPEN)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  user User @relation(fields: [userId], references: [id])
-  job  Job? @relation(fields: [jobId], references: [id])
+  // Delivery to the safety desk. The alert row is written first; these columns record whether the desk got it.
+  payload           Json?     // exactly what the desk is sent (contains names, phones and the address: removed when the person is deleted); null on rows from before this column
+  deliveredAt       DateTime? @map("delivered_at") @db.Timestamptz(3) // null = the desk has not confirmed receipt yet
+  deliveryAttempts  Int       @default(0) @map("delivery_attempts")    // CHECK >= 0
+  lastAttemptAt     DateTime? @map("last_attempt_at") @db.Timestamptz(3)
+  lastDeliveryError String?   @map("last_delivery_error") @db.VarChar(200)
+  // A human took it on (acknowledged) and closed it (resolved). Who is kept; the admin account may be removed later.
+  acknowledgedAt    DateTime? @map("acknowledged_at") @db.Timestamptz(3)
+  acknowledgedById  String?   @map("acknowledged_by") @db.Uuid
+  resolvedAt        DateTime? @map("resolved_at") @db.Timestamptz(3)
+  resolvedById      String?   @map("resolved_by") @db.Uuid
 
+  user           User  @relation("SosRaiser", fields: [userId], references: [id])
+  job            Job?  @relation(fields: [jobId], references: [id])
+  acknowledgedBy User? @relation("SosAcknowledger", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  resolvedBy     User? @relation("SosResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  // Hand-written in the account_deletion_and_sos_delivery migration (Prisma cannot express them), keep them there:
+  //  - sos_alerts_delivery_attempts_nonneg: CHECK (delivery_attempts >= 0)
+  //  - sos_alerts_undelivered_idx: (created_at) WHERE delivered_at IS NULL AND payload IS NOT NULL (the retry sweep)
   @@index([status, createdAt])
   @@map("sos_alerts")
 }
