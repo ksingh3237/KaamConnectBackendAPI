@@ -22,6 +22,8 @@ process.env.OTP_DEV_BYPASS = 'false';
 process.env.SMS_PROVIDER = 'console';
 // Lets each test present its own client IP (X-Forwarded-For) so per-IP rate limits stay isolated.
 process.env.TRUST_PROXY = '1';
+// The per-user limit is exercised by its own spec (which lowers it); the other suites make bursts of calls as one user.
+process.env.USER_RATE_LIMIT_PER_MIN = '100000';
 // Files go to a throwaway folder, never the developer's .local-storage. Manual verification is the
 // production behaviour; suites that need auto mode override it explicitly.
 process.env.STORAGE_PROVIDER = 'local';

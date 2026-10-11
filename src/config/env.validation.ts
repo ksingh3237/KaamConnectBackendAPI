@@ -217,6 +217,16 @@ export class EnvVars {
   @Max(1)
   COMMISSION_BENCHMARK_RATE: number = 0.2;
 
+  // --- Rate limiting ---
+  // Requests one signed-in user may make per minute across ALL routes, on top of the per-IP limits, which are
+  // unchanged. Generous for a person (4 a second, sustained) and a hard stop for a script. 30 is the floor so a
+  // typo cannot lock everyone out.
+  @Transform(toNumber)
+  @IsInt()
+  @Min(30)
+  @Max(100000)
+  USER_RATE_LIMIT_PER_MIN: number = 240;
+
   // --- Safety (decision Q-10) ---
   // Where SOS alerts are POSTed as JSON. Required in production so an alert can never go nowhere;
   // without it (development) alerts are only written to the log.

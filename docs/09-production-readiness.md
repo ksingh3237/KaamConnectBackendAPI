@@ -49,9 +49,43 @@ Throttling is the first guard, so a flood of unauthenticated calls never reaches
 
 ### 1.3 What I did not change, and why
 
-No limit was raised or lowered, no route gained or lost a throttle, and the guard order is untouched: weakening any of
+No per-IP limit was raised or lowered and no route lost a throttle. The only addition is the per-user layer of 1.4, which is strictly additive (it can only refuse more, never less) and lives on its own branch. Weakening any of
 them is a security decision for you, and the strengthening options (T-1, T-4) change behaviour for real users, so they
 want your go-ahead and a test pass of their own.
+
+### 1.4 The per-user limit (built as a separate, additive change; not merged, not enabled anywhere until you merge it)
+
+**What it is.** A second rate limit that counts what one signed-in **account** does, whatever address the requests come
+from. It sits **behind** the existing per-IP limit and changes none of its numbers, routes or behaviour.
+
+| Item | Value |
+|---|---|
+| Limit | `USER_RATE_LIMIT_PER_MIN`, default **240 requests per minute per account across all routes** (4 a second sustained). Allowed range 30 to 100,000 (the floor stops a typo from locking everyone out) |
+| What a person needs | A busy screen makes 5 to 10 calls; 240 a minute is far above any person and a hard stop for a script. The existing single-route per-IP limit (60 a minute) is the tighter one for one address, so **for a normal user on one address nothing changes** |
+| Exempt | `POST /jobs/:id/sos`: an emergency call is the last thing to refuse (the per-IP limit still applies to it, as today). Requests with nobody signed in (login, refresh, health) are not counted: the per-IP guard handles them |
+| Refusal | The same `429 TOO_MANY_REQUESTS` body and a `Retry-After` header, exactly like the per-IP guard, so clients handle both alike |
+| Order of guards | per-IP throttle, login, **per-user throttle**, profile/admin check. It needs the user (so after login) and comes before the profile lookup (so a refused request costs no database query) |
+| Storage | The same in-memory store as the per-IP limit, so the same caveats apply: per process, reset by a restart, doubled by a second instance (T-3). Keys are hashes (no user id in the clear) |
+| A tighter limit on one route | The mechanism exists (`@UserThrottle({ limit, ttlMs })`, counted in addition to the all-routes limit) and is tested, but **no route uses it**: a limit on real users, for example on `GET /workers`, is your decision |
+
+**What it protects against:** one account (or one stolen token) driving the API from many addresses (mobile data, a VPN,
+a botnet), which the per-IP limit cannot see. **What it does not fix, and I want to be plain about it:** users who share
+one address still share that address's per-route budget (T-1). Fixing that means raising the per-IP numbers for signed-in
+traffic, which loosens an existing protection, so it stays your decision, best taken with real traffic data. This layer
+is what would make such a decision safer, since an account would still be capped.
+
+**Tests.** 8 unit tests (exactly the limit then refusal with `Retry-After`; users counted separately; nobody signed in or a
+non-HTTP request is not counted; `@SkipUserThrottle()`; the window expires; the route-level limit refuses first and the
+all-routes counter still counts; the route-level limit does not loosen the all-routes one; keys are hashes) and 8 e2e
+tests through the real HTTP stack (one account refused after its limit while every call comes from a different address;
+the limit is across routes; another user unaffected; it follows the account across logins; **SOS stays reachable when
+the budget is spent**; unauthenticated calls and health are not counted; a refused request creates nothing; **the
+per-IP limit is unchanged**: 60 a minute per route per address, also for a signed-in user). Five mutation checks (never
+refuse, per route instead of across routes, SOS not exempt, keyed by address instead of user, wrong guard order) each
+fail tests.
+
+**To switch it off or tune it:** set `USER_RATE_LIMIT_PER_MIN` (no code change). There is deliberately no "off": the
+maximum is 100,000 a minute, which is effectively off, and that setting is for tests.
 
 ---
 
@@ -83,6 +117,7 @@ MSG91 sender exists (Phase 8, blocked on DLT approval).
 | 7 | `WORKER_VERIFICATION_MODE=manual`, and at least one admin user (`users.is_admin = true`) | There is no endpoint to create an admin: it is a database update by an operator. Record who holds it |
 | 8 | `PUBLIC_BASE_URL` | Only used by the development file store; leave empty with `s3` |
 | 9 | `REALTIME_CORS_ORIGINS` empty (the native app sends no `Origin`) unless a web client is added | |
+| 9a | `USER_RATE_LIMIT_PER_MIN` (default 240; only once the per-user layer of 1.4 is merged) | Leave at the default until real traffic shows otherwise |
 | 10 | Business settings reviewed: `JOB_OPEN_TTL_HOURS` (24), `DIRECT_ACCEPT_TTL_MIN` (10), `COMMISSION_BENCHMARK_RATE` (0.20, disclosed in the app), booking settings (defaults) | **Per-service durations and the 13 area coordinates are still empty** (Q-18, D-14): matching falls back to same-city and every job is 90 minutes |
 | 11 | Node 20.19 or newer (`engines`) | |
 | 12 | Time zone: the database session is pinned to UTC by the app's adapter; **PgBouncer in transaction mode would drop that pin** unless startup `options` are allowed (K-13) | Do not put PgBouncer in front without checking |

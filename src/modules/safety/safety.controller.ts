@@ -10,6 +10,7 @@ import {
   CurrentUser,
   type AuthenticatedUser,
 } from '../../common/decorators/current-user.decorator.js';
+import { SkipUserThrottle } from '../../common/throttle/user-throttle.decorator.js';
 import { SosDto } from '../fulfilment/dto/fulfilment.dto.js';
 import { SosService } from './sos.service.js';
 
@@ -18,6 +19,8 @@ import { SosService } from './sos.service.js';
 export class SafetyController {
   constructor(private readonly sos: SosService) {}
 
+  // An emergency call is the last thing to refuse: exempt from the per-user limit (the per-IP one still applies).
+  @SkipUserThrottle()
   @Post()
   @HttpCode(201)
   raise(

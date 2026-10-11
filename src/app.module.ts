@@ -1,9 +1,16 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ProfileGuard } from './common/guards/profile.guard.js';
+import {
+  USER_RATE_LIMIT,
+  UserThrottlerGuard,
+  type UserRateLimit,
+} from './common/throttle/user-throttler.guard.js';
 import { AppConfigModule } from './config/app-config.module.js';
+import type { EnvVars } from './config/env.validation.js';
 import { HealthModule } from './health/health.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
@@ -47,11 +54,21 @@ import { PrismaModule } from './prisma/prisma.module.js';
     SafetyModule,
     RealtimeModule,
   ],
-  // Order matters: rate-limit first (cheap, protects the login endpoints), authenticate, then
-  // check the profile / admin requirement the route declares.
+  // Order matters: rate-limit by address first (cheap, protects the login endpoints), authenticate, rate-limit by
+  // user (needs the user, and comes before the profile lookup so a refused request costs no query), then check the
+  // profile / admin requirement the route declares.
   providers: [
+    {
+      provide: USER_RATE_LIMIT,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<EnvVars, true>): UserRateLimit => ({
+        limit: config.get('USER_RATE_LIMIT_PER_MIN', { infer: true }),
+        windowMs: 60_000,
+      }),
+    },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
     { provide: APP_GUARD, useClass: ProfileGuard },
   ],
 })
