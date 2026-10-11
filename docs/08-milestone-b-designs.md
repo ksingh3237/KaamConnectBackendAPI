@@ -5,48 +5,72 @@ touched. Each section ends with the exact questions I need answered before build
 
 ---
 
-## 1. `DELETE /me`: account deletion by anonymisation (Q-17)
+## 1. `DELETE /me`: account deletion by anonymisation (Q-17), final design for approval
+
+Status: **design v2, incorporating your decisions; not implemented.** I will not start until you approve it.
+
+**Your decisions, as built into this design:** the person re-confirms with an OTP; an admin cannot delete their own
+account; deletion is refused while the user has an active job; a disabled user may ask for deletion only after safe
+identity verification; necessary business history is kept and personal data removed; every retention period that is
+a legal question is listed in 1.6 for sign-off and none is assumed.
 
 ### 1.1 Why anonymise instead of delete the rows
 
 A user row cannot simply be deleted. `jobs.customer_id` references `customer_profiles`, and `jobs.worker_id`,
 `offers`, `reviews` and `payments` hang off the profiles, with no cascade (deliberately: a job is a record two people
-rely on). Deleting a customer would either fail or erase the worker's earnings history, and deleting a worker would
-erase customers' receipts and ratings. So: **remove everything that identifies the person, keep the records the other
-party and the business still need, with the person replaced by "Deleted user".**
+rely on). Deleting a customer would fail or erase the worker's earnings history; deleting a worker would erase
+customers' receipts and ratings. So: **remove everything that identifies the person, keep the records the other party
+and the business still need, with the person replaced by "Deleted user".**
 
-### 1.2 Contract
+### 1.2 Two doors to the same operation
 
-`DELETE /api/v1/me` (authenticated).
+**Door A: an active account (`DELETE /api/v1/me`, authenticated).** The app asks for a code with the existing
+`POST /auth/otp/request`, then calls `DELETE /me` with `{ "code": "123456", "confirm": true }`. Both are needed: the
+session proves the device, the code proves control of the phone number, so a stolen access token alone cannot erase an
+account. The code is checked with the same rules as login (5 wrong tries per code, single use, 5 minutes) but **does
+not create a session**.
+
+**Door B: a disabled account (`POST /auth/deletion-requests`, public, strictly throttled).** A disabled user cannot
+hold a session (login and refresh are refused), so the authenticated route cannot work for them. Instead they prove
+control of the number with an OTP and submit `{ "phone", "code" }`. This **records a request** (it does not delete):
+the account was disabled for a reason, possibly an investigation or a safety case, and a code alone (SIM-swap is a
+real risk) must not be enough to destroy it. An admin then reviews the request in a short queue
+(`GET /admin/deletion-requests`) and approves or declines it (`POST /admin/deletion-requests/:userId/approve|decline`,
+logged with the admin id). Approval runs the same operation as Door A. The public route answers the same way for
+every phone number (`202`, "if this number belongs to an account, your request has been received"), so it cannot be
+used to find out who has an account. How quickly a request must be answered is a legal question (1.6).
+
+*Alternative for Door B, if you prefer it simpler:* the OTP alone deletes a disabled account at once. I do not
+recommend it, for the reason above, but it removes the admin queue.
 
 | Case | Answer |
 |---|---|
-| Done | `204`. Every refresh token is gone, the account can no longer log in, and the realtime connections are closed |
-| The user has an active job (below) | `409 ACTIVE_JOB_BLOCKS_DELETION`, body lists the user's own blocking jobs (`id`, `reference`, `status`, `role`). Nothing is changed |
-| An admin account | `409 ADMIN_CANNOT_DELETE_SELF` (proposed: another admin must demote them first) |
-| Wrong or missing confirmation | `422` |
-| Too many attempts | `429` (proposed 3 per hour per user) |
+| Door A done | `204`. Refresh tokens deleted, realtime connections closed, the account can no longer log in |
+| Door A, active job | `409 ACTIVE_JOB_BLOCKS_DELETION`, body lists the caller's own blocking jobs (`id`, `reference`, `status`, `role`). Nothing changed |
+| Door A, admin account | `409 ADMIN_CANNOT_DELETE_SELF` (an admin must be demoted by another admin first; an admin account also cannot be approved for deletion through Door B) |
+| Door A, wrong, expired or reused code | `401 OTP_INVALID` (same body as login), counts against the code's 5 attempts |
+| Door A, missing confirmation | `422` |
+| Door A, disabled account | `403 ACCOUNT_DISABLED` with a pointer to Door B |
+| Door B | `202` always (generic); `429` when throttled (proposed 3 per hour per number and 5 per hour per IP) |
+| Admin approves while the user now has an active job | `409`, the request stays pending |
 | Called again after deletion | the old access token gets `403 ACCOUNT_DISABLED` until it expires (15 min), then `401` |
 
 **Active job** = the user is the customer or the assigned worker of a job in `OPEN`, `ASSIGNED`, `ARRIVED`,
-`IN_PROGRESS` or `WORK_COMPLETED` (so payment is still to be recorded), or has an `OPEN` SOS alert. `COMPLETED` and
-`CANCELLED` never block. Things that do **not** block and are handled for the user: their pending quotes are set to
-`WITHDRAWN`, and direct requests addressed to them are declined (the customer is told, as for any decline).
+`IN_PROGRESS` or `WORK_COMPLETED` (payment still to be recorded), or has an `OPEN` SOS alert. `COMPLETED` and
+`CANCELLED` never block. Handled for the user and not blocking: pending quotes are set to `WITHDRAWN`; direct requests
+addressed to a worker are declined (the customer is told, as for any decline).
 
-**Confirmation (needs your decision, section 1.6):** I recommend re-verifying by OTP, because the access token alone
-(15 minutes, on a lost phone) must not be enough for something irreversible: the app calls `POST /auth/otp/request`,
-then `DELETE /me` with `{ "code": "123456", "confirm": true }`.
+### 1.3 What happens, in order (one idempotent operation, safe to retry)
 
-### 1.3 What happens, in order (one idempotent operation; safe to retry)
-
-1. Re-check there is no active job, taking a row lock on the user so a quote cannot be accepted in between
-   (the same lock order the accept path already uses, to be verified in code review).
-2. Delete the user's files from storage first, then their rows: Aadhaar images (private bucket), profile photo, and
-   problem photos / voice notes / work photos of the user's own jobs. A delete of a missing object counts as success,
-   so a retry after a crash finishes the job. If storage is down the call fails with `502` and changes nothing else.
-3. In one database transaction: anonymise (table below), delete refresh tokens, withdraw pending quotes, mark the
-   user inactive and deleted.
-4. After commit: close the user's Socket.IO connections; write one log line with the user id only.
+1. Take a row lock on the user and re-check there is no active job, so a quote cannot be accepted in between. The
+   concurrency rule (a customer accepting this worker's quote while the worker deletes themselves) must be **proven by
+   a two-transaction test before it ships**; I have not yet verified the lock order in the accept path.
+2. Delete the user's files from storage first, then their rows: Aadhaar images (private bucket), profile photo, and the
+   problem photos / voice notes / work photos of the user's own jobs. Deleting a missing object counts as success, so
+   a retry after a crash finishes the job. If storage is unreachable the call fails (`502`) and nothing else changes.
+3. In one transaction: anonymise (1.4), delete refresh tokens, withdraw pending quotes, set `deleted_at`.
+4. After commit: close the user's Socket.IO connections; write one log line with the user id only, and append the user
+   id and date to the **deletion ledger** (1.5).
 
 ### 1.4 What is removed, kept and why
 
@@ -58,54 +82,78 @@ then `DELETE /me` with `{ "code": "123456", "confirm": true }`.
 | `otp_challenges` for the old number | deleted | Keyed by phone number |
 | Customer profile | `full_name` -> "Deleted user", `photo_key` removed (object deleted); preferences reset | Name and photo |
 | `addresses` | deleted | Home addresses |
-| Worker profile | `full_name` -> "Deleted worker", `photo_key`, `upi_id`, `vehicle`, `badge`, `rejection_reason`, `skills`, `languages` cleared; `verification_status` set to `REJECTED` so the worker can never be discovered, quoted or accepted (K-36 rule); `rating_sum` and `review_count` kept | Personal and payment details; kept counters keep history arithmetic consistent |
-| `worker_documents` (Aadhaar) | objects deleted from the private bucket, then rows | Most sensitive data we hold. Same deletion code as D-9 |
-| `worker_locations` | deleted | Location data |
-| `worker_trades`, `worker_leads` | deleted | No longer meaningful |
+| Worker profile | `full_name` -> "Deleted worker"; `photo_key`, `upi_id`, `vehicle`, `badge`, `rejection_reason`, `skills`, `languages` cleared; `verification_status` set to `REJECTED` so the worker can never be discovered, quoted or accepted (K-36 rule); `rating_sum` and `review_count` kept | Personal and payment details; the kept counters keep history arithmetic consistent |
+| `worker_documents` (Aadhaar) | objects deleted from the private bucket, then rows | Most sensitive data held. Same deletion code as D-9 |
+| `worker_locations`, `worker_trades`, `worker_leads` | deleted | Location data; no longer meaningful |
 | Jobs (as customer or worker) | **kept**: id, number, category, area, status, timing, dates, bill items, payment, review | The other party's history and the business's accounts. The deleted person appears as "Deleted user/worker" |
-| Job free text and address of a deleted **customer** | `address_line` replaced by "(removed)", `lat`/`lng` and `description` cleared, `arrival_code` cleared; `title` kept (proposed, see question 4) | The home address and anything typed about the problem |
-| Job media (problem photos, voice notes, work photos) of those jobs | objects and rows deleted | Pictures of a home and a voice |
+| Job free text and address of a deleted **customer** | `address_line` replaced by "(removed)"; `lat`, `lng`, `description` and `arrival_code` cleared; `title` kept (proposed: it is what makes the worker's history readable, but it is free text, so it is on the sign-off list) | The home address and anything typed about the problem |
+| Job media of those jobs | objects and rows deleted | Pictures of a home and a voice |
 | `offers` | kept; `message` cleared; pending ones `WITHDRAWN` | Free text may contain contact details |
-| `payments`, `bill_items` | kept unchanged | Financial records; retention period to be set with counsel |
+| `payments`, `bill_items` | kept unchanged | Financial records; period in 1.6 |
 | `reviews` | kept (rating and tags); tips stay recorded | They shape the other person's rating and history |
 | `job_security_events` | kept; `ip` cleared on rows the user acted in | Security audit trail without the address |
-| `sos_alerts` | kept as they are (user id is now the tombstone user) | Safety record; retention period to be set with counsel |
-| Logs | already masked (phone numbers and tokens never logged in the clear) | Nothing to do |
+| `sos_alerts` | kept (user id is now the tombstone user) | Safety record; period in 1.6 |
+| Logs | already masked (phones and tokens never in the clear); contain user ids | Retention period in 1.6 |
 
-What stays can still point to a tombstone user id; nothing that remains lets anyone recover the name, number,
-address, photos or Aadhaar images.
+What stays can still point to a tombstone user id; nothing that remains lets anyone recover the name, number, address,
+photos or Aadhaar images.
 
-### 1.5 Schema change this needs (not applied)
+### 1.5 Backups, restores and the deletion ledger (easy to get wrong)
 
-`users.deleted_at TIMESTAMPTZ(3) NULL`. It lets the code tell "deleted" from "disabled by an admin", gives the audit
-trail its timestamp, and makes the operation idempotent (`deleted_at IS NOT NULL` -> already done). Additive, nullable,
-no backfill, no lock beyond a metadata change. I would bring this migration to you for approval, with a backup first,
-exactly as for the earlier ones. A separate audit table is **not** proposed: the user id and `deleted_at` are the
-audit.
+A deleted person's data still exists in **older backups**, and restoring an old backup would **bring deleted accounts
+back**. So: (a) backup retention must be a stated period (1.6), and (b) every deletion appends `user id + date` (no
+personal data) to a ledger kept outside the database (the durable log sink, and a copy with the backups), and the
+restore procedure in the runbook gets a step that **re-applies every ledger entry newer than the backup** with an
+operator script before the application is reopened. The script runs the same anonymisation routine without the OTP
+(operator-only, logged). I would write that script and a test for it as part of the build.
 
-Code needed: a `delete(bucket, key)` on `StorageService` (the local and S3 providers; `StorageService` has only
-presign and `exists` today), shared with D-9. The S3 role needs `s3:DeleteObject` on both buckets.
+### 1.6 Retention and legal decisions: **none is assumed; each needs sign-off from counsel**
 
-### 1.6 Tests I would write
+| Item | What I propose to build as the default | Question for counsel |
+|---|---|---|
+| `payments`, `bill_items`, job rows (accounting records) | Kept indefinitely until a period is set | How long must or may they be kept after the account is gone, and may they stay linked to the (anonymised) account? |
+| `reviews` and tips | Kept | May ratings stay after deletion, and for how long? |
+| `sos_alerts` (and the location in them) | Kept as they are | Safety/legal retention period; should coordinates be cleared after some time? |
+| `job_security_events` (IP cleared on deletion) | Kept without the IP | Is the pseudonymous audit trail acceptable, and for how long? |
+| Job `title` and offer text | `title` kept, offer `message` cleared | Is a free-text title personal data to be cleared? |
+| Aadhaar images | Deleted at account deletion (and 7 days after the decision under D-9) | Is collecting them lawful at all, and is 7 days right? |
+| Application logs | Masked already; retention period to be set with the hosting choice | Maximum retention |
+| Database backups | Retention period to be set with the hosting choice (1.5) | Maximum time deleted data may remain in backups |
+| Deletion ledger (user id + date) | Kept indefinitely | Acceptable as a record that deletion happened? |
+| Time limit to act on a request (Door B) and the right to refuse (investigation hold) | An admin answers within days, not stated in code | The statutory deadline and grounds for refusing |
+| Who may request on behalf of a person (a family member, a lost SIM) | Nobody: OTP to the number only | Whether a manual identity process is needed |
 
-Each rule above as an e2e test (refused with a job in each blocking status, as customer and as worker; not blocked by
-`COMPLETED`/`CANCELLED`; quotes withdrawn; direct requests declined); the data table checked row by row against the
-database afterwards (no phone, name, address, photo key, document row or token survives); the other party's views
-still work (worker earnings, customer receipt, ratings) and show "Deleted user"; re-signing up with the same phone
-creates a different user; a retry after a simulated storage failure completes; two simultaneous deletions give one
-success; a quote accepted concurrently with deletion cannot strand a job; unit tests for the tombstone; and mutation
-checks of each guard.
+### 1.7 Schema changes this needs (not applied; to come to you for approval with a backup, as before)
 
-### 1.7 Questions for you
+- `users.deleted_at TIMESTAMPTZ(3) NULL`: tells "deleted" from "disabled by an admin", gives the audit its timestamp,
+  makes the operation idempotent.
+- `users.deletion_requested_at TIMESTAMPTZ(3) NULL` for Door B (the admin queue is `WHERE deletion_requested_at IS NOT
+  NULL AND deleted_at IS NULL`). A request table is not proposed: one pending request per user is enough, and the
+  decision is logged with the admin id.
 
-1. **Confirmation:** OTP re-verification (recommended) or just a typed confirmation?
-2. **Admins:** refuse self-deletion of an admin account (proposed)?
-3. **Disabled accounts:** may a disabled (admin-blocked) user delete their account? I lean no (you may need the data
-   for an investigation), but that is a policy decision, and the DPDP Act may say otherwise: counsel.
-4. **Job `title`:** keep it (the worker's history stays readable) or clear it too (it is free text)?
-5. **Retention of `payments`, `bill_items`, `reviews` and `sos_alerts`:** how long, and does counsel agree they may be
-   kept at all after deletion? I have not set any period.
-6. **Migration:** approve `users.deleted_at` (section 1.5) as a separate, backed-up step?
+Both are additive, nullable, no backfill, metadata-only. Code needed: `StorageService.delete(bucket, key)` (local and
+S3; shared with D-9; the S3 role needs `s3:DeleteObject` on both buckets) and a way to verify an OTP without issuing a
+session.
+
+### 1.8 Tests I would write
+
+Door A: refused with a job in each blocking status as customer and as worker; not blocked by `COMPLETED`/`CANCELLED`;
+admin refused; wrong, reused, expired code refused and counted; a valid token **without** a code refused; quotes
+withdrawn; direct requests declined. Door B: the answer is identical for registered, disabled and unknown numbers;
+nothing is deleted before approval; a non-admin cannot approve; an admin account cannot be approved; approval with an
+active job is refused. After deletion, row by row against the database: no phone, name, address, photo key, document
+row or token survives; the other party's views still work (earnings, receipt, ratings) and show "Deleted user";
+re-signing up with the same phone makes a different user; a retry after a simulated storage failure completes; two
+simultaneous deletions give one success; a quote accepted at the same moment cannot strand a job; the ledger entry is
+written; the restore script re-applies a ledger entry. Plus mutation checks of each guard.
+
+### 1.9 Decisions I still need from you (everything else above is settled by your answers)
+
+1. **Door B:** admin-approved request (recommended) or OTP-only immediate deletion?
+2. **Job `title`:** keep (proposed) or clear?
+3. **Approve the two column additions** (1.7) as a separate, backed-up step when the time comes?
+4. **Take 1.6 to counsel.** I will build with the defaults in the middle column unless told otherwise, and each is a
+   single constant or query to change.
 
 ---
 

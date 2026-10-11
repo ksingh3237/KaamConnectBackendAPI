@@ -13,7 +13,7 @@ defects today), and nothing is proposed that weakens a control.
 
 | Layer | Setting | Where |
 |---|---|---|
-| Global default | 60 requests per minute **per client IP**, in memory | `app.module.ts` (`ThrottlerModule.forRoot`) |
+| Global default | 60 requests per minute **per client IP, counted separately for each route** (the counter key contains the controller and handler name, read in the installed `@nestjs/throttler` source), in memory | `app.module.ts` (`ThrottlerModule.forRoot`) |
 | `POST /auth/otp/request` | 20 per hour per IP, **plus** per-phone rules: 30 s between codes, 5 codes per phone per hour | `auth.controller.ts`, `otp.service.ts` |
 | `POST /auth/otp/verify` | 30 per 15 min per IP, **plus** 5 wrong attempts per code | same |
 | `POST /auth/refresh` | 60 per 15 min per IP | same |
@@ -39,10 +39,10 @@ Throttling is the first guard, so a flood of unauthenticated calls never reaches
 
 | # | Risk | Why it matters | Recommendation (needs your approval) |
 |---|---|---|---|
-| T-1 | **Everything is keyed by IP.** Mobile networks in India put many phones behind one public address (carrier-grade NAT), as do shared Wi-Fi networks | 60 requests/min is shared by every user on that address. A busy screen makes 5 to 10 requests; ten active users on one address can start seeing `429`. `refresh` (60 per 15 min per IP) allows only about 60 users behind one address, since each refreshes every 15 min. `otp/request` (20 per hour per IP) could block a launch event or a shop where many people sign up from one Wi-Fi | Keep the per-IP limits as the outer fence, and add a **per-user** limit (the user id from the token) for authenticated routes, so one noisy user cannot spend everyone's budget. That is additive, not a loosening. Raising the per-IP numbers is the other option; I would not do that before there is real traffic data |
-| T-2 | **`TRUST_PROXY` must match the real hop count.** Too low (0 behind a load balancer): every user appears to be the balancer's address, so the whole user base shares one 60/min bucket: an outage that looks like load. Too high: a client can forge `X-Forwarded-For` and dodge limits | Easy to get wrong at first deployment | A release-checklist step (section 2): after deploy, make one call from each of two different networks and confirm the request log shows two different masked client addresses (`ip=` in the log line) |
+| T-1 | **Everything is keyed by IP.** Mobile networks in India put many phones behind one public address (carrier-grade NAT), as do shared Wi-Fi networks | Counters are per route, so a busy screen's mix of calls does not add up to one budget. The exposure is on routes one client calls **repeatedly**: for example `PUT /workers/me/location` pings (if the app pings every 5 seconds that is 12 a minute per moving worker, so five workers behind one address reach 60 and the rest see `429`; the ping interval is the frontend's choice; the socket event `location:update` is not throttled, so the app should use it), and the single-route auth limits: `refresh` (60 per 15 min per IP allows about 60 users behind one address, since each refreshes every 15 min) and `otp/request` (20 per hour per IP, which a shop or event where many people sign up on one Wi-Fi could exhaust) | An additive **per-user** layer (built as a separate change, section 1.4) protects against one account (or one botnet rotating IPs) abusing the API, but **does not fix the shared-address case**: that needs the per-IP numbers raised for authenticated traffic, which loosens an existing protection and is therefore your decision, best taken with real traffic data |
+| T-2 | **`TRUST_PROXY` must match the real hop count.** Too low (0 behind a load balancer): every user appears to be the balancer's address, so the whole user base shares each route's 60/min bucket: an outage that looks like load. Too high: a client can forge `X-Forwarded-For` and dodge limits | Easy to get wrong at first deployment | A release-checklist step (section 2): after deploy, make one call from each of two different networks and confirm the request log shows two different masked client addresses (`ip=` in the log line) |
 | T-3 | **In-memory counters per instance** | With 2+ instances limits multiply and are inconsistent; a restart or deploy resets them (an attacker gains a fresh budget every deploy) | Fine for one instance at launch (D-6). Move storage to Redis with the Phase 8 Redis work, before scaling out |
-| T-4 | **Expensive read routes sit under the generic limit.** Discovery costs about 40 to 60 ms of CPU per call (K-15) and one user may make 60 per minute | About 17 users doing that continuously would saturate one core. Unlikely at launch unless the app polls discovery (the frontend should confirm it does not), but nothing stops a script | Add a lower per-user limit on `GET /workers` (for example 30 per minute) once T-1 exists; revisit with real traffic |
+| T-4 | **Expensive read routes sit under the generic limit.** Discovery costs about 40 to 60 ms of CPU per call (K-15) and one user may make 60 per minute (per route, per IP) | About 17 users doing that continuously would saturate one core. Unlikely at launch unless the app polls discovery (the frontend should confirm it does not), but nothing stops a script | The per-user layer of section 1.4 can carry a lower limit for `GET /workers` (the mechanism exists; **not enabled**, as it would restrict real users); revisit with real traffic |
 | T-5 | **Socket.IO handshakes are not rate limited by the app** | A flood of connection attempts is refused at the handshake (invalid JWT) but still costs the server a little each | Handle at the edge (load balancer or WAF rate rule) when hosting is chosen; not an application change |
 | T-6 | **No limit on `POST /jobs/:id/payment`, cancel, quote and bill routes beyond the default** | Each is guarded by state and ownership (idempotent payment, state machine), so repeated calls do no harm, only cost | Covered by the generic limit; no change |
 | T-7 | **Clients must back off on `429`** (frontend): the throttler sends a `Retry-After` header (present in the installed `@nestjs/throttler` code) | A client that retries immediately makes a limit worse | Frontend: wait for `Retry-After`; to be added to the frontend gap list |
@@ -108,14 +108,20 @@ Facts any image or build script must respect:
 - `scripts/smoke.sh` needs the **console** OTP sender and auto verification, so it can run in CI and locally but not
   against production. Production verification after a release is `/health/ready` plus a real login.
 
-### 2.4 Decisions still needed from you (hosting and launch)
+### 2.4 Launch blockers register (tracked here and in `progress.md`; nothing is closed until the evidence exists)
 
-| Decision | Why it blocks |
-|---|---|
-| **Hosting for the app** (the plan says "AWS S3 + RDS"; the compute host is not decided: ECS, Elastic Beanstalk, EC2, App Runner, or another provider) | Dockerfile or Procfile, TRUST_PROXY value, WebSocket/stickiness settings, secret store, staging environment |
-| **Staging environment** | The acceptance for Phase 7 asks for a golden-path run against staging and migrations from an empty and from a previous-version database |
-| **SMS provider account and DLT approval** (MSG91) | Production cannot boot without it |
-| **SOS receiver and the on-call person** | Required to boot; delivery untested |
-| **S3 account, buckets, KMS** | K-3 |
-| **Domain name and TLS** | Customers' app configuration |
-| **Counsel's view on Aadhaar images** and retention periods | D-9, `DELETE /me` |
+| ID | Blocker | Owner | What it blocks | Status (2026-10-11) |
+|---|---|---|---|---|
+| B-1 | **Hosting for the app.** The plan says "AWS S3 + RDS"; the compute host (ECS, Elastic Beanstalk, EC2, App Runner, another provider) is not decided | You | Dockerfile or Procfile, the `TRUST_PROXY` value, WebSocket and stickiness settings, secret store, staging, the restore drill | **Open.** No Dockerfile exists on purpose |
+| B-2 | **MSG91 sender and DLT approval.** `SMS_PROVIDER=msg91` throws "not implemented yet"; the console sender is refused in production | You (DLT, account), then me (sender, Phase 8) | **The application cannot start in production** | **Open.** Phase 8 work, not started |
+| B-3 | **SOS receiver and a named on-call person.** `SOS_WEBHOOK_URL` is required (https) at boot | You | Boot in production; a real safety response | **Open.** Delivery only tested against a mock; no retry and no acknowledge (K-28) |
+| B-4 | **S3 account, the two buckets, encryption, IAM role** | You | Uploads in production; file deletion for D-9 and `DELETE /me` | **Open.** `S3StorageService` has never touched a real bucket (K-3) |
+| B-5 | **Verified coordinates for the 13 areas** | You | Distance, radius matching, travel gaps, ETA (K-4, K-26) | **Open.** 0 of 13 set; matching falls back to same-city |
+| B-6 | **Minutes per service (8 categories)** | You | Realistic booking windows (D-14) | **Open.** 0 of 8 set; every job is 90 minutes |
+| B-7 | **Idle-machine benchmark** | You (a quiet machine) | The performance claims in `progress.md` §3.4 | **Open, kept pending by your instruction.** The before/after numbers for Milestone B were taken on a busy laptop, with old and new code alternated to cancel the noise; they prove a ratio, not absolute capacity |
+| B-8 | **Legal sign-off:** collecting Aadhaar images at all and for how long (D-9); the retention table for `DELETE /me` (`08` §1.6); log and backup retention; the deadline to act on a deletion request | You and counsel | D-9 and `DELETE /me` can be built but not switched on; launch | **Open.** No period is assumed anywhere in code |
+| B-9 | **Domain name and TLS** | You | The app's API address | **Open** |
+| B-10 | **Restore drill** | Me, once staging exists | The recovery time in the runbook | **Open.** Needs B-1 |
+| B-11 | **`btree_gist` on the production database role** (the scheduling migration creates it) | Me, on the real database | The first production migration | **Open.** CI passed only with a superuser |
+| B-12 | **Frontend work:** back off on `429` using `Retry-After`; single-flight token refresh (K-6); send location through the socket event rather than REST pings; "re-upload required" copy (G-15); show the benchmark rate beside "Total saved" (D-5) | Frontend | A smooth first launch | **Open** |
+| B-13 | **Approvals pending:** `DELETE /me` final design (`08` §1.9); the D-9 migration on dev (`08` §2); merging per-user throttling (§1.4); `@nestjs/swagger` (§3) | You | Milestone B items | **Open** |
