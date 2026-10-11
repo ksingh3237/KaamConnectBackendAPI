@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
+import { USER_RATE_LIMIT } from '../../src/common/throttle/user-throttler.guard.js';
 import type { OtpChannel } from '../../src/generated/prisma/enums.js';
 import { OtpSender } from '../../src/modules/auth/sms/otp-sender.js';
 import {
@@ -76,11 +77,18 @@ export async function createTestApp(
     verificationMode?: 'auto' | 'manual';
     /** Off by default: one log line per request would drown the test output. */
     requestLogging?: boolean;
+    /** Lowers the per-user rate limit (requests per minute) for a spec that tests it. */
+    userRateLimitPerMin?: number;
   } = {},
 ): Promise<TestApp> {
   const sender = new RecordingOtpSender();
   const safety = new RecordingSafetyNotifier();
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+  let builder = Test.createTestingModule({ imports: [AppModule] });
+  if (options.userRateLimitPerMin !== undefined)
+    builder = builder
+      .overrideProvider(USER_RATE_LIMIT)
+      .useValue({ limit: options.userRateLimitPerMin, windowMs: 60_000 });
+  const moduleRef = await builder
     .overrideProvider(OtpSender)
     .useValue(sender)
     .overrideProvider(SafetyNotifier)
