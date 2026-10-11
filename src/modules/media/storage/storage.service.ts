@@ -27,4 +27,10 @@ export abstract class StorageService {
   }): Promise<string>;
 
   abstract exists(bucket: StorageBucket, key: string): Promise<boolean>;
+
+  /**
+   * Removes one object. Deleting an object that is already gone is a success, so a retry after a crash
+   * finishes the job (account deletion and the Aadhaar retention sweep rely on this). Any other failure throws.
+   */
+  abstract delete(bucket: StorageBucket, key: string): Promise<void>;
 }

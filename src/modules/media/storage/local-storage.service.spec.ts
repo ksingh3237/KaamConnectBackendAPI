@@ -1,3 +1,4 @@
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ConfigService } from '@nestjs/config';
 import type { EnvVars } from '../../../config/env.validation.js';
@@ -86,6 +87,25 @@ describe('LocalStorageService (development storage)', () => {
   it('reports a missing file as not existing instead of throwing', async () => {
     expect(await serviceWith().exists('media', KEY)).toBe(false);
     expect(await serviceWith().exists('media', '../escape')).toBe(false);
+  });
+
+  it('deletes an object, treats a missing one as success, and refuses keys outside its shape', async () => {
+    const s = serviceWith();
+    const file = s.filePath('private', KEY);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, 'x');
+    expect(await s.exists('private', KEY)).toBe(true);
+
+    await s.delete('private', KEY);
+    expect(await s.exists('private', KEY)).toBe(false);
+
+    await expect(s.delete('private', KEY)).resolves.toBeUndefined(); // already gone: still a success
+    await expect(s.delete('private', '../../etc/passwd')).rejects.toThrow(
+      'Invalid storage key',
+    );
+    await expect(s.delete('nope' as never, KEY)).rejects.toThrow(
+      'Invalid storage key',
+    );
   });
 
   it('builds absolute upload URLs under the API prefix', async () => {

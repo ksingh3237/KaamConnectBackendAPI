@@ -87,6 +87,11 @@ export class LocalStorageService extends StorageService {
     }
   }
 
+  async delete(bucket: StorageBucket, key: string): Promise<void> {
+    // filePath() refuses anything that is not one of our own key shapes, so this cannot leave the root
+    await fs.rm(this.filePath(bucket, key), { force: true });
+  }
+
   sign(parts: (string | number)[]): string {
     return createHmac('sha256', this.secret)
       .update(parts.join('\n'))
