@@ -19,7 +19,7 @@
 | **Transport / headers** | Sniffing, XSS in docs | TLS only (terminate at host), `helmet`, CORS allow-list (Expo web dev origin only), Swagger disabled in production, body size limit 1 MB |
 | **Abuse** | Spam jobs/offers | Throttler defaults + per-user caps (e.g. ≤ 10 open jobs per customer, ≤ 30 offers/hour/worker); job TTL |
 | **Secrets** | Leaked keys | `.env` git-ignored, `.env.example` keys only, validated at boot, secrets from host secret store in prod, rotation procedure documented, `JWT_ACCESS_SECRET` ≥ 32 bytes |
-| **Logging** | PII/OTP in logs | Redaction interceptor; OTP only logged by the `console` sender in dev |
+| **Logging** | PII/OTP in logs | `MaskingLogger` masks every log line and a request logger records the route template only (see §12.3); OTP only logged by the `console` sender in dev |
 | **DB** | Over-privileged app user | App role has DML only; migrations run with a separate DDL role in CI/CD; backups encrypted; connection via TLS |
 | **Dependencies** | Supply chain | Lockfile committed, `npm audit` + Dependabot/Renovate in CI, pin `prisma`/`@prisma/client` to 7.10.x (see `02-database.md §7`) |
 | **Privacy law** | DPDP Act 2023 obligations | Consent captured (`termsAcceptedAt`), purpose limitation, deletion path. **Account deletion is not in the current UI but store policies generally require it** → add `DELETE /me` (anonymise PII, keep job/payment rows for records) in Phase 7 if you agree (Q-17). Validate with counsel |
@@ -55,7 +55,7 @@
 
 Golden-path e2e (the product's core): register customer & worker → worker verified (admin) → post job → worker lead appears → quote → accept → GPS ping → tracking shows ETA → arrival code → bill → approve → complete → pay → review → ratings/earnings/savings/receipt reflect it.
 
-Coverage target: ≥ 85 % lines on `auth`, `jobs`, `offers`, `reviews`; ≥ 70 % overall. CI gate: lint, `tsc --noEmit`, unit, e2e (Postgres service container), migration drift check, `npm audit --omit=dev` (high+), build.
+Coverage target: ≥ 85 % lines on `auth`, `jobs`, `offers`, `reviews`; ≥ 70 % overall. CI gate: lint, `tsc --noEmit`, unit, e2e (Postgres service container), migration drift check, `npm audit --omit=dev` (high+), build. **Enforced since Phase 7, Milestone A** (`npm run test:cov`, CI step "Coverage thresholds"; merged unit and e2e reports): lines overall 97.5 % (2258/2315), auth 94.2 % (163/173), jobs 98.9 % (356/360), offers 98.0 % (249/254), reviews 97.3 % (36/37); branches overall 89.2 % (1378/1544) against a 70 % branch gate. See §12.1.
 
 ## 4. API validation checks (acceptance)
 - Every DTO field has a type decorator and bounds from `03-api-spec.md §4`.
@@ -103,7 +103,7 @@ Known limits (accepted for v1): access tokens cannot be revoked before they expi
 
 **Finding worth remembering:** Prisma's pg adapter stores timestamps shifted by the *server's* time zone when it is not UTC (this laptop's PostgreSQL is `Asia/Calcutta`: rows were 5 h 30 min off, invisible to app-only round trips). All connections now pin the session to UTC. If you ever put PgBouncer in transaction mode in front of the database, allow the `options` startup parameter (`ignore_startup_parameters = options`) or the pin is lost.
 
-Decided but not yet built (see `01-requirements.md §11.1`): **D-8** name or photo change on a VERIFIED worker re-opens review (needs tests that an unchanged re-sent name or `photoKey` does not, and that removing the photo does not); **D-9** Aadhaar images deleted 7 days after the decision, with an S3 lifecycle hard cap (Phase 7; needs a test that the object and the row are both gone and that no key is logged); **D-10** region `ap-south-1`.
+Decided but not yet built (see `01-requirements.md §11.1`): **D-8** was built in Phase 7, Milestone A (§12.2); **D-9** Aadhaar images deleted 7 days after the decision, with an S3 lifecycle hard cap (Phase 7; needs a test that the object and the row are both gone and that no key is logged); **D-10** region `ap-south-1`.
 ## 7. Implemented in Phase 4 and how it is tested
 
 | Control | Where | Test (real PostgreSQL / real WebSocket) |
@@ -250,3 +250,100 @@ Mutation checks run on 2026-10-11: removing the reset cap, the cooldown or the o
 | **Data minimisation** | Send the receiver the least it needs: alert id, job reference, who raised it, the phone numbers, a location label and a link to a protected admin page for the address. Do not put the full address and other personal data in a third-party service by default. Never log the full payload |
 | **Secrets and authenticity** | Receiver keys and the request-signing secret come only from environment variables or a secrets manager, never from the repository; production requires the signing secret; each request carries a timestamp and an HMAC signature so the receiver can reject forged or replayed alerts |
 | **Verification** | Mock-receiver tests (200, 500, timeout, 4xx, slow) prove our behaviour but not real delivery. Real delivery is claimed only after a **clearly labelled test alert with fake data** reaches a receiver you own and authorise, and is then repeated on a schedule |
+
+## 12. Phase 7, Milestone A: coverage gates, D-8, masked logging, IDOR matrix, `ProfileGuard`
+
+Files added: `scripts/coverage-check.mjs`; `modules/workers/verification-rules.ts` (+ spec, + `test/worker-reverification.e2e-spec.ts`); `common/logging/{redact,masking-logger,request-logger}.ts` (+ specs, + `test/request-logging.e2e-spec.ts`); `test/idor-matrix.e2e-spec.ts`; `common/guards/profile.guard.spec.ts`; and for the two fixes below `modules/offers/visible-offers.ts`, `test/account-disabled.e2e-spec.ts` and `test/quotes-under-review.e2e-spec.ts`. Totals after this milestone: 299 unit tests in 33 files and 718 e2e tests in 26 files, all passing in one `npm run test:cov` run.
+
+### 12.1 Coverage: measured and enforced
+
+Two instrumented runs (`npm run test:cov:unit`, `npm run test:cov:e2e`) write separate reports; `scripts/coverage-check.mjs` merges them and compares lines with the thresholds documented above. The generated Prisma client, the specs and `main.ts` are not counted. CI runs both suites once, with coverage on, then the check, so the build fails below a threshold.
+
+| Area | Lines covered (merged) | Required | Phase 6 baseline, measured before this milestone |
+|---|---|---|---|
+| overall | 97.5 % (2258/2315) | 70 % | 97.5 % (2191/2248) |
+| auth | 94.2 % (163/173) | 85 % | 94.2 % (163/173) |
+| jobs | 98.9 % (356/360) | 85 % | 98.9 % (356/360) |
+| offers | 98.0 % (249/254) | 85 % | 98.0 % (243/248) |
+| reviews | 97.3 % (36/37) | 85 % | 97.3 % (36/37) |
+| **branches, overall** | 89.2 % (1378/1544) | **70 %** (new gate; the line gates above are unchanged) | not measured before |
+
+The documented line thresholds were met from the start, with a wide margin, and the 70 % branch gate added in this milestone is met too: the gate would not notice a fall of ten points. Raising the bars (for example 90 % overall and 95 % on the four named areas) is a decision for you. The unit suite alone covers about a quarter of the lines; the e2e suite carries the rest, which is by design (real PostgreSQL and WebSockets). The check was shown to fail: with the `reviews` bar set to 99.9 % it prints the weakest files and exits 1.
+
+### 12.2 D-8: a name or photo change re-opens review
+
+| Control | Where | Test |
+|---|---|---|
+| A different normalised name (trimmed, spaces collapsed, case-insensitive) on a VERIFIED worker sends the profile to PENDING and clears `verifiedAt`, through `PUT` and `PATCH` | `reviewEffect` in `verification-rules.ts` | 13 unit tests of the rule; e2e: the worker vanishes from `GET /workers`, `GET /workers/:id` is 404 and `GET /leads` is `403 NOT_VERIFIED` |
+| The same name, in another case or with extra spaces, changes nothing, and neither does any other field | same | e2e: three spellings via `PATCH` plus a full `PUT`; `verifiedAt` unchanged |
+| A different non-null `photoKey` (including a first photo) triggers review; the same key, an omitted key and `null` (removal) do not | same | e2e; a key that is not the worker's own upload is still refused (422) and nothing changes |
+| `auto` mode re-approves at once when both Aadhaar images exist, with a fresh `verifiedAt`; without them the worker stays PENDING; an unchanged name keeps the original `verifiedAt` | `autoApproveIfEligible` (unchanged) | e2e in a separate auto-mode app |
+| A worker under review is never stranded mid-job | job routes check ownership, not verification | e2e: name changed while a job is assigned, then arrival with the code succeeds |
+| Six simultaneous saves with a new name end in one consistent PENDING state | transaction | e2e |
+| An admin approving again makes the worker visible again | admin verify route | e2e |
+
+### 12.3 Masked logging
+
+| Control | Where | Test |
+|---|---|---|
+| Every string and error stack that is logged has JWTs, bearer tokens and `password` / `token` / `otp` / `api_key` values removed (the key name is kept) and phone numbers masked, whichever service logged it. This also covers Prisma error messages, which can echo the values of a failed query | `MaskingLogger`, `redact.ts` | unit: 12 masking cases including what must NOT be masked (UUIDs, 13-digit timestamps, longer numbers); logger tests for messages, `Error` objects, explicit stack strings and the context label |
+| Sensitive object properties (`phone`, `token`, `code`, `arrivalCode`, `addressLine`, `upiId`...) are replaced when an object is logged | Nest's `redact` option | unit |
+| One line per finished request with the route TEMPLATE, status, time, request id, user id and the client address with its last part blanked; nothing from the body, headers, query values or real ids | request-logger middleware | e2e: the real HTTP stack with stdout and stderr captured, after a login, an arrival with a code and a request with query values: none of the phone (either form), the OTP, the issued tokens, the Authorization header, the arrival code, the query values or the full address appears |
+| Refusals made by guards are logged (401, 403, 404, 429), as warnings | middleware, not an interceptor | e2e |
+| A caller-supplied `X-Request-Id` cannot forge a log line; an unmatched path is never echoed back | `pickRequestId`, route mapping | unit and e2e |
+| 5xx stack traces carry the request id | `AllExceptionsFilter` | unit |
+
+A defect found while writing these tests: the first version of the logger override crashed on every `logger.error(message)` without a stack (Nest calls the stack printer with `undefined`). A regression test covers it.
+
+### 12.4 IDOR matrix
+
+Every route that takes an id in its path, called by people who do not own the object. 34 routes have a path parameter: 30 are in the matrix and 4 are exempt with a written reason (`GET /workers/:id` is public to customers by design and checked separately, `PUT /workers/me/documents/:type` takes a fixed list not an object id, and the two development-storage routes are authorised by a signed URL). A completeness guard enumerates the routes the application registers and fails if one is not classified, or if the matrix lists one that no longer exists.
+
+| Check | Detail |
+|---|---|
+| Same answer as an unknown id | for each route and each kind of intruder (a stranger of the right kind, a user of the wrong kind), the response for a REAL id equals the response for an id that does not exist: same status and same body, so existence and state cannot be learned. Routes are deliberately called in a state that is wrong for the real owner, so a 409 leaking ahead of the ownership check would show |
+| Status | strangers get 404, users of the wrong kind 403, admin routes 404 for everyone who is not an admin, unauthenticated 401 |
+| Nothing changes | a fingerprint (md5 of every row) of 14 tables is identical before and after all refused calls |
+| Cross-resource | another customer's own job cannot be paired with someone else's quote to accept it (404, quote unchanged) |
+| Result | 100 tests, all passing on the first correct run. **No ownership defect was found.** The one expectation I had to correct was `POST /jobs/:id/cancel`: for a caller who is neither party a worker gets `403 CUSTOMER_PROFILE_REQUIRED` and another customer gets 404, identical to an unknown id in both cases, so nothing leaks |
+
+### 12.5 `ProfileGuard` review
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | Cost (K-7): one primary-key lookup per guarded request, reading only the key or status; no N+1; the answer is read fresh each time, which is what makes a re-review (D-8) take effect on the next call | Reviewed, no change. Caching would defeat the "immediate" property |
+| 2 | The guard had no unit tests of its own | Fixed: 20 unit tests cover every branch of the rewritten guard (§12.7), including the single-lookup and fresh-read properties and the 404-not-403 rule for admin routes |
+| 3 | **Confirmed by experiment (K-5 was worse than documented):** `is_active` was only checked on admin routes. A user disabled in the database who still held an unexpired access token (up to 15 minutes) got 200 on `GET /customers/me/jobs`, **201 on `POST /jobs`** and 200 on a worker's `GET /leads`; only `GET /me` refused (401) | **Fixed locally on your decision, §12.7** |
+| 4 | **A worker under review kept the quotes already sent, and customers could still accept them** (K-36) | **Fixed locally on your decision, §12.7** |
+
+### 12.6 Mutation checks of the new tests
+
+Each was made in turn and restored: D-8 (case-sensitive name compare, photo removal triggering review, `verifiedAt` not cleared, the rule switched off), logging (masking removed, stack not masked, real URL logged, address not masked, Authorization header logged, refused requests not logged), IDOR (receipt readable by anyone; customer-role check removed, caught by both the guard unit test and the matrix), and the coverage gate (a stricter bar fails with exit 1). Every one made at least one test fail.
+
+### 12.7 K-5 and K-36 fixed (on your decision, 2026-10-11)
+
+**K-5: `403 ACCOUNT_DISABLED` on every protected route.** `ProfileGuard` now makes one primary-key lookup from the user's side (`users` with the profile selected only when the route asks for it) on every authenticated request, so guarded routes cost the same one query as before and routes with no profile requirement gain one lookup of a single column. It also replaces the two or three separate lookups an admin-and-profile route could make. Public routes and WebSocket traffic are skipped (the socket handshake already checks the flag). Admin routes keep answering 404 to a disabled admin so the admin API is never advertised.
+
+| Check | Test |
+|---|---|
+| Every route the application registers that needs a login answers `403 ACCOUNT_DISABLED` to a disabled user holding a valid token (enumerated from the router, so a route added later is covered) | e2e, 8 tests |
+| Admin routes answer 404 to a disabled admin; a control run with an active user never produces `ACCOUNT_DISABLED` (so the probe is not vacuous) | e2e |
+| Nothing is written on behalf of a disabled user (no job created) | e2e |
+| Re-enabling works on the very next request with the same token, and disabling again takes effect at once | e2e |
+| A disabled account cannot refresh either, and its refresh family stays revoked after re-enabling | e2e |
+| One lookup per request, which columns it reads, disabled-with-and-without-a-profile, nonexistent user, public and non-HTTP skipped | 20 unit tests |
+
+**K-36: quotes of a worker under review are hidden and cannot be accepted.** One shared rule, `VISIBLE_TO_CUSTOMER` in `offers/visible-offers.ts` (an ACCEPTED quote, or a PENDING one whose worker is VERIFIED), is used by the quote list, by every quote count (job view, customer list, lead cards) and by the accept check, which reads the worker's status inside the accepting transaction and answers `409 OFFER_UNAVAILABLE` without saying why.
+
+| Check | Test |
+|---|---|
+| After a name change the worker disappears from the list; the list, `GET /jobs/:id`, `GET /customers/me/jobs` and the lead card all show the same smaller number; "fastest" is judged among visible quotes; nothing in the response names the hidden worker | e2e, 9 tests |
+| Accepting such a quote is `409 OFFER_UNAVAILABLE`, the message does not mention review, and the job, the quotes and the bill are unchanged | e2e |
+| A REJECTED worker is treated the same; the rule covers every request the worker has quoted on | e2e |
+| The quotes come back by themselves when an admin verifies the worker again, and can then be accepted | e2e |
+| A worker already chosen keeps their accepted quote visible and counted after a later re-review | e2e |
+| The worker still sees their own waiting quote in their activity | e2e |
+
+Mutation checks of both fixes, each made in turn and restored: the visibility rule weakened, the accept check removed, the list filter, the job-view count and the list count reverted to the old filter, ACCEPTED no longer always visible; and for K-5 the check removed (e2e and unit), restricted to routes that have a profile requirement (the original gap), and a disabled admin answered with 403 instead of 404. Every one made at least one test fail.
+
+**Choices to know about:** `GET /me` now answers 403 instead of 401 for a disabled account; `POST /auth/logout` is refused for a disabled account, which **leaves the session's refresh tokens unrevoked until someone tries to refresh**: experiment: logout 403, token rows not revoked, re-enable, refresh 200 (an active account is unchanged: 204, revoked, 401). **Proposed adjustment awaiting your decision: let logout bypass the disabled check;** the extra lookup is on routes such as `GET /locations` and `GET /service-categories`, which previously touched no table of their own. The cost is one primary-key read and has not been benchmarked (the benchmark is pending).

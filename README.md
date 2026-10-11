@@ -2,7 +2,7 @@
 
 REST + Socket.IO API for the KaamConnect mobile app (hyperlocal home-services marketplace for Chandigarh · Mohali · Panchkula).
 
-> **Status:** Phases 0–6 are built and tested: login, profiles, uploads and verification; jobs, worker discovery, leads, quotes, direct booking and live Socket.IO push; scheduling and availability; fulfilment (arrival code with a customer-issued reset, bill, payment, tracking, SOS); and reviews, earnings and savings. GitHub CI has passed for Phases 0–5; the Phase 6 and arrival-recovery work is in review in pull request #2 (not merged), and its CI result is on that PR. Still pending: an SOS receiver and on-call arrangement, the idle-machine benchmark, real S3, verified area coordinates and per-service durations. Design, decisions, roadmap and exact status: [docs/](./docs/README.md) and [docs/progress.md](./docs/progress.md).
+> **Status:** Phases 0–6 are built and tested: login, profiles, uploads and verification; jobs, worker discovery, leads, quotes, direct booking and live Socket.IO push; scheduling and availability; fulfilment (arrival code with a customer-issued reset, bill, payment, tracking, SOS); and reviews, earnings and savings. GitHub CI has passed for Phases 0–6 and the arrival-recovery work: pull request #2 was merged into `main`, with CI passing on the PR and again on `main`. Phase 7, Milestone A (enforced coverage gates, D-8 re-verification, masked logging, an IDOR matrix, and the K-5 and K-36 fixes) is built locally and has not been through a pull request yet. Still pending: an SOS receiver and on-call arrangement, the idle-machine benchmark, real S3, verified area coordinates and per-service durations. Design, decisions, roadmap and exact status: [docs/](./docs/README.md) and [docs/progress.md](./docs/progress.md).
 
 ## Tech stack
 
@@ -79,7 +79,8 @@ Validated at boot; the app refuses to start on any problem and lists all of them
 |---|---|
 | `start:dev` / `build` / `start:prod` | run with reload / compile to `dist/` / run compiled |
 | `lint` / `typecheck` / `format` | oxlint / `tsc --noEmit` / prettier |
-| `test` / `test:e2e` / `test:cov` | unit / HTTP + WebSocket end-to-end (real PostgreSQL) / coverage |
+| `test` / `test:e2e` | unit / HTTP + WebSocket end-to-end (real PostgreSQL) |
+| `test:cov` | both suites with coverage, then `coverage:check`, which merges the reports and fails below the documented thresholds (85 % of lines in auth, jobs, offers and reviews; 70 % overall) |
 | `test:perf` | on-demand benchmark: loads 5,000 workers and 50,000 jobs into `KaamConnect_test` and prints endpoint timings |
 | `db:generate` | `prisma generate` |
 | `db:migrate:dev` | `prisma migrate dev` (**local only**; needs permission to create a shadow database) |

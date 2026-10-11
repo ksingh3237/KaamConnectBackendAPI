@@ -27,7 +27,7 @@ KaamConnectBackendAPI/
 │  │  ├─ decorators/              # @Public, @CurrentUser, @RequireProfile('customer'|'worker'), @Roles('admin')
 │  │  ├─ guards/                  # JwtAuthGuard (global), ProfileGuard, AdminGuard
 │  │  ├─ filters/                 # AllExceptionsFilter (+ Prisma error mapper P2002→409, P2025→404)
-│  │  ├─ interceptors/            # LoggingInterceptor (redacts phone), (optional) ClassSerializer
+│  │  ├─ logging/                 # MaskingLogger (masks every log line), request-logger middleware, masking helpers
 │  │  ├─ dto/                     # PaginationDto, IdParamDto
 │  │  └─ utils/                   # phone.ts (E.164), geo.ts (haversine, eta), money.ts, time-ist.ts, cursor.ts
 │  └─ modules/
@@ -79,7 +79,7 @@ Rules: controllers never touch Prisma; services of one module don't reach into a
 | Rate limiting | `@nestjs/throttler`, default 60/min/IP; stricter per-route limits on the OTP/refresh routes (per IP); per-phone limits live in `OtpService` (DB-backed). `TRUST_PROXY` makes the IP the real client IP behind a load balancer. Guard order: Throttler, then JWT | |
 | Time-based work | `@nestjs/schedule`: every minute expire OPEN jobs (broadcast: 24 h, direct: `DIRECT_ACCEPT_TTL_MIN`) past `expiresAt` and emit `lead.closed` / `direct.expired`; hourly purge old OTP rows and revoked refresh tokens. Idempotent; safe to run on 2 instances via `UPDATE … WHERE status='OPEN' AND expires_at < now()` | No queue yet |
 | Third parties | Interfaces `OtpSender`, `StorageService`, (later) `PushSender`; DI token per interface; dev OTP sender logs to console (D-2); dev storage may use local MinIO or a dev bucket | Swap providers (MSG91 later, Q-15) without touching business code |
-| Logging | Nest `Logger` JSON in prod; request id; mask phones (`+9198****3210`), never log tokens, OTPs, Aadhaar keys | |
+| Logging | **Built (Phase 7, Milestone A).** `MaskingLogger` is the application logger: every string and error stack has credentials removed and phone numbers masked (`+9198****3210`), and sensitive object properties are replaced. One masked line per finished request from middleware (not an interceptor, because guards run first and an interceptor would never see the 401, 403, 429 and 404 responses): route template, status, time, `X-Request-Id`, user id, client address with its last part blanked. Never the body, headers, query values or real path ids. JSON output in production is not enabled yet | |
 | Docs | `@nestjs/swagger` generated from DTOs; exported `openapi.json` committed in CI for contract diffing | Gives frontend a typed contract |
 | Pagination | Cursor on `(created_at, id)` | Stable under inserts |
 | Transactions | `prisma.$transaction(async tx => …)` for accept-offer, payment, review, job create (+media) | |

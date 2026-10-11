@@ -68,4 +68,9 @@ Project setup and commands are in the [root README](../README.md). This folder h
 - Contracts: `03-api-spec.md §11.9` (arrival-code recovery) and `§12` (reviews, earnings, savings). Controls and tests: `05-security-testing.md §10`; the agreed SOS requirements (nothing built) are in `§11`.
 - New migration `20261011150000_arrival_code_reset` (additive: two columns on `jobs`, one enum, the audit table `job_security_events`, one CHECK). Applied to the test database and, after a verified backup, to the development database. Phase 6 needed no migration.
 - No new settings. `COMMISSION_BENCHMARK_RATE` (default 0.20) now feeds `GET /me/savings`.
-- **Not verified yet:** CI on this work (its result is on pull request #2, not recorded here), the idle-machine benchmark, real SOS delivery, real S3.
+- GitHub CI passed on pull request #2 (run 38118304386, final commit `2552314`) and on `main` after it was merged (run 38120336005). **Not verified yet:** the idle-machine benchmark, real SOS delivery, real S3.
+
+### Phase 7, Milestone A notes
+- Coverage gates, D-8, masked logging, the IDOR matrix and the `ProfileGuard` review: `05-security-testing.md §12`. Status: `progress.md §0.9`. K-5 (disabled accounts) and K-36 (quotes of a worker under review) are fixed locally; contract changes in `03-api-spec.md §13`.
+- No migration and no new setting. Two new error codes: `403 ACCOUNT_DISABLED` (every protected route) and `409 OFFER_UNAVAILABLE`. `npm run test:cov` is new; CI now runs both suites with coverage and checks the thresholds.
+- **Not verified yet:** CI on this work, and the idle-machine benchmark.
