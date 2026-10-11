@@ -194,7 +194,7 @@ Tests: `test/phase5-requirements.e2e-spec.ts` (27), `test/fulfilment.e2e-spec.ts
 
 ## 10. Arrival-code recovery and Phase 6: controls and how they are tested
 
-Files: `test/arrival-code-reset.e2e-spec.ts` (12 tests), `arrival-code-reset.service.spec.ts` (5), `test/phase6.e2e-spec.ts` (22), `earnings/ist-time.spec.ts` (4), `earnings/earnings.service.spec.ts` (3).
+Files: `test/arrival-code-reset.e2e-spec.ts` (16 tests), `arrival-code-reset.service.spec.ts` (8), `test/db-constraints.e2e-spec.ts` (6 of its 22 are about the audit table and the new CHECK), `test/phase6.e2e-spec.ts` (23), `earnings/ist-time.spec.ts` (4), `earnings/earnings.service.spec.ts` (3).
 
 ### 10.1 Arrival-code reset
 
@@ -210,7 +210,12 @@ Files: `test/arrival-code-reset.e2e-spec.ts` (12 tests), `arrival-code-reset.ser
 | Audit trail without secrets | `job_security_events` (append-only) | `ARRIVAL_LOCKED` (worker), `ARRIVAL_CODE_RESET` (customer, same transaction), `ARRIVAL_RESET_REFUSED` (deduplicated to one per minute); the table has no column that can hold a code; neither code appears in the dump of the rows |
 | The code is never pushed | `job.arrival_code_reset` carries only `{jobId}` | the pushed events never contain the new code |
 | A new assignment starts clean | worker back-out clears the counters | after back-out the job is OPEN with counter 0 and no cooldown, and the audit rows remain |
-| Per-address backstop | `@Throttle` 20 / hour on the route | not separately tested (the per-job limits are the real control) |
+| Per-address backstop | `@Throttle` 20 / hour on the route | the 21st call from one address is refused with the generic `429 TOO_MANY_REQUESTS` before it reaches the service, another address still reaches it, and nothing changes (the per-job limits remain the real control) |
+| Lock audit under parallel guesses | `arrival.service.ts` | ten simultaneous wrong guesses lock the job once and write exactly one `ARRIVAL_LOCKED` event (attempts stored: 5) |
+| Direct-booking jobs | same reset path | a direct booking the worker accepted can be locked, reset and arrived at, with the same audit rows |
+| Who hears about a reset | `JobEventsService.arrivalCodeReset` | only the assigned worker gets `job.arrival_code_reset`; the customer, a stranger and an unrelated worker get none, and the new code is in nobody's pushes |
+| `RESET_FAILED` and the redraw | `ArrivalCodeResetService.reset` | unit tests with a stubbed database: three repeated codes in a row give `503 RESET_FAILED` and change, audit and push nothing; a repeat followed by a good code succeeds on the second draw; an unknown job is a 404 with no redraw |
+| Database integrity of the new objects | migration `20261011150000_arrival_code_reset` | the counter cannot be negative; an audit row needs an existing job; a job that has audit rows cannot be deleted (`ON DELETE RESTRICT`); deleting the actor keeps the row and blanks the actor (`ON DELETE SET NULL`); only the three event types can be stored |
 
 **Lockout implications.** A worker who fills the five tries is locked until the customer issues a new code. The customer can do that three times per assignment. If the third code is also locked, the only exits are the customer cancelling or the worker backing out. A customer who never opens the app can leave a worker locked; the worker can back out. There is deliberately no time-based unlock and no worker-side or admin-side unlock.
 
@@ -226,6 +231,8 @@ Files: `test/arrival-code-reset.e2e-spec.ts` (12 tests), `arrival-code-reset.ser
 | Earnings | `EarningsService` | only this worker's COMPLETED jobs inside the IST period; a stray payment on a not-completed job does not count (mutation-checked); a payment 1 ms before midnight IST belongs to yesterday, one exactly at midnight to today; week starts Monday; verification not required; customer 403 |
 | Savings | `EarningsService.savings` | only the caller's own COMPLETED jobs, as customer or as worker; tips excluded; default role customer; rate disclosed |
 | Day boundaries | `istRange` | unit tests around 23:59:59.999 / 00:00 IST, Sunday night to Monday, month end, December |
+
+Review follow-up, 2026-10-11: the tests added after the code review were mutation-checked as well. Changing the earnings upper bound from `<` to `<=`, auditing the lock on every refusal, removing the per-address throttle and also pushing the reset to the customer each made a test fail; so did shortening the redraw loop and removing the refusal explanation (unit tests). The database constraints cannot be mutated through code, so the CHECK and the two foreign keys were changed on the **test database only** (CHECK dropped; each key made `ON DELETE CASCADE`), each change made one test fail, and the original definitions were then restored and compared: identical.
 
 Mutation checks run on 2026-10-11: removing the reset cap, the cooldown or the owner check, and for Phase 6 removing the review ownership check, the totals update, the IST offset and the COMPLETED filter in earnings and in savings, each made at least one test fail; the code was restored each time.
 

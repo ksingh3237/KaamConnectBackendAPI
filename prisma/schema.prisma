@@ -391,6 +391,8 @@ model Job {
   //    WHERE status IN ('ASSIGNED','ARRIVED','IN_PROGRESS')  => one worker, no overlapping bookings
   //  - jobs_one_in_progress_per_worker: UNIQUE (worker_id) WHERE status IN ('ARRIVED','IN_PROGRESS')
   //  - jobs_worker_booked_idx: (worker_id, booked_start_at) WHERE status IN ('ASSIGNED','ARRIVED','IN_PROGRESS')
+  // Hand-written in the arrival_code_reset migration (Prisma cannot express it), keep it there:
+  //  - jobs_arrival_code_resets_nonneg: CHECK (arrival_code_resets >= 0). The cap of 3 resets and the 60 s cooldown live in code.
   @@index([status, categoryId, areaId, createdAt]) // worker lead feed
   @@index([customerId, status, createdAt])         // customer "My Jobs" tabs
   @@index([workerId, status, createdAt])           // worker "My Jobs" tabs / earnings

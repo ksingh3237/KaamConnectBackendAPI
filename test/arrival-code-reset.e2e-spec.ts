@@ -341,4 +341,161 @@ describe('Arrival-code reset (e2e)', () => {
       );
     });
   });
+
+  describe('lock audit under parallel guesses', () => {
+    it('ten simultaneous wrong guesses lock the job once and write exactly one ARRIVAL_LOCKED event', async () => {
+      const customer = await customerIn(t);
+      const worker = await verifiedWorkerIn(t);
+      const { job, code } = await assigned(t, customer, worker);
+
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () =>
+          arriveAt(t, worker, job.id, wrongCodeFor(code)),
+        ),
+      );
+      // Only the guesses that were counted can be told "wrong"; the rest meet the lock.
+      expect(results.every((r) => r.status === 422 || r.status === 429)).toBe(
+        true,
+      );
+      expect(results.some((r) => r.status === 429)).toBe(true);
+      expect((await row(job.id)).arrivalAttempts).toBe(5);
+
+      const log = await events(job.id);
+      const locks = log.filter((e) => e.type === 'ARRIVAL_LOCKED');
+      expect(locks).toHaveLength(1);
+      expect(locks[0]?.actorId).toBe(worker.userId);
+      expect(log.filter((e) => e.type !== 'ARRIVAL_LOCKED')).toEqual([]);
+    });
+  });
+
+  describe('direct-booking jobs', () => {
+    it('a direct booking that the worker accepted can be locked, reset and arrived at like any other', async () => {
+      const customer = await customerIn(t);
+      const worker = await verifiedWorkerIn(t);
+      const booked = await http
+        .post(
+          `${V1}/jobs/direct-booking`,
+          {
+            categoryId: 'plumber',
+            title: 'Geyser not working',
+            timing: 'IMMEDIATE',
+            addressId: customer.addressId,
+            workerId: worker.userId,
+          },
+          { token: customer.accessToken },
+        )
+        .expect(201);
+      const jobId = booked.body.id as string;
+      await http
+        .post(
+          `${V1}/jobs/${jobId}/direct/accept`,
+          {},
+          { token: worker.accessToken },
+        )
+        .expect(200);
+
+      const view = await http
+        .get(`${V1}/jobs/${jobId}`, { token: customer.accessToken })
+        .expect(200);
+      expect(view.body).toMatchObject({ status: 'ASSIGNED', isDirect: true });
+      const code = view.body.arrivalCode as string;
+      expect(code).toMatch(/^\d{4}$/);
+
+      await lockOut(worker, jobId, code);
+      await arriveAt(t, worker, jobId, code).expect(429);
+
+      const res = await reset(jobId, customer).expect(200);
+      expect(res.body.arrivalCode).not.toBe(code);
+      expect(res.body).toMatchObject({
+        arrivalLocked: false,
+        arrivalResetsLeft: 2,
+      });
+      await arriveAt(t, worker, jobId, code).expect(422);
+      const ok = await arriveAt(t, worker, jobId, res.body.arrivalCode).expect(
+        200,
+      );
+      expect(ok.body.status).toBe('ARRIVED');
+
+      expect((await events(jobId)).map((e) => e.type)).toEqual([
+        'ARRIVAL_LOCKED',
+        'ARRIVAL_CODE_RESET',
+      ]);
+    });
+  });
+
+  describe('who hears about a reset', () => {
+    it('only the assigned worker gets job.arrival_code_reset: not the customer, a stranger, or an unrelated worker', async () => {
+      const customer = await customerIn(t);
+      const worker = await verifiedWorkerIn(t);
+      const stranger = await customerIn(t);
+      const otherWorker = await verifiedWorkerIn(t);
+      const { job } = await assigned(t, customer, worker);
+
+      const workerInbox = record(await connect(t, worker.accessToken));
+      const customerInbox = record(await connect(t, customer.accessToken));
+      const strangerInbox = record(await connect(t, stranger.accessToken));
+      const otherWorkerInbox = record(
+        await connect(t, otherWorker.accessToken),
+      );
+
+      const res = await reset(job.id, customer).expect(200);
+      const newCode = res.body.arrivalCode as string;
+
+      expect(await workerInbox.waitFor('job.arrival_code_reset')).toEqual([
+        { jobId: job.id },
+      ]);
+      // Give a mis-routed push time to arrive, then check nobody else got one.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      for (const inbox of [customerInbox, strangerInbox, otherWorkerInbox]) {
+        expect(inbox.matching('job.arrival_code_reset')).toEqual([]);
+      }
+      // And the new code is in nobody's pushes at all.
+      for (const inbox of [
+        workerInbox,
+        customerInbox,
+        strangerInbox,
+        otherWorkerInbox,
+      ]) {
+        expect(JSON.stringify(inbox.received)).not.toContain(newCode);
+      }
+    });
+  });
+
+  describe('RESET_FAILED and the per-address backstop', () => {
+    it('the per-address backstop (20 an hour) refuses the 21st call with the generic 429, per address, and changes nothing', async () => {
+      const customer = await customerIn(t);
+      const worker = await verifiedWorkerIn(t);
+      const { job } = await assigned(t, customer, worker);
+      const ip = '10.200.0.1';
+      const call = (address: string) =>
+        http.post(
+          `${V1}/jobs/${job.id}/arrival-code/reset`,
+          {},
+          { token: customer.accessToken, ip: address },
+        );
+
+      expect((await call(ip)).status).toBe(200);
+      // Calls 2..20 reach the service and are refused by the cooldown.
+      for (let i = 2; i <= 20; i++) {
+        const res = await call(ip);
+        expect([i, res.status, res.body.code]).toEqual([
+          i,
+          429,
+          'RESET_COOLDOWN',
+        ]);
+      }
+      // The 21st never reaches the service: the throttler answers.
+      const throttled = await call(ip);
+      expect(throttled.status).toBe(429);
+      expect(throttled.body.code).toBe('TOO_MANY_REQUESTS');
+      // The limit is per address: another address still reaches the service.
+      const elsewhere = await call('10.200.0.2');
+      expect([elsewhere.status, elsewhere.body.code]).toEqual([
+        429,
+        'RESET_COOLDOWN',
+      ]);
+
+      expect((await row(job.id)).arrivalCodeResets).toBe(1);
+    });
+  });
 });

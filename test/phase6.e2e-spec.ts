@@ -587,6 +587,87 @@ describe('Phase 6: reviews, activity, earnings and savings (e2e)', () => {
       expect([again.body.amount, again.body.jobsDone]).toEqual([50, 1]);
     });
 
+    it('week and month: a payment 1 ms before an edge is outside, exactly on the start is inside, 1 ms before the end is inside, exactly on the end is outside', async () => {
+      const customer = await customerIn(t);
+      const worker = await verifiedWorkerIn(t);
+
+      // The IST week (Monday start) and month, worked out here from the calendar, not taken from the API.
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        weekday: 'short',
+      }).formatToParts(new Date());
+      const get = (type: string) => parts.find((x) => x.type === type)!.value;
+      const [year, month, day] = [get('year'), get('month'), get('day')].map(
+        Number,
+      ) as [number, number, number];
+      const sinceMonday = [
+        'Mon',
+        'Tue',
+        'Wed',
+        'Thu',
+        'Fri',
+        'Sat',
+        'Sun',
+      ].indexOf(get('weekday'));
+      const istMidnight = (y: number, m: number, d: number) =>
+        new Date(Date.UTC(y, m - 1, d) - (5 * 60 + 30) * 60_000);
+      const week = {
+        from: istMidnight(year, month, day - sinceMonday),
+        to: istMidnight(year, month, day - sinceMonday + 7),
+      };
+      const monthRange = {
+        from: istMidnight(year, month, 1),
+        to: istMidnight(year, month + 1, 1),
+      };
+
+      // Eight payments, each worth a different power of two so the sum says exactly which were counted.
+      const points = [
+        { at: new Date(week.from.getTime() - 1), amount: 1 },
+        { at: week.from, amount: 2 },
+        { at: new Date(week.to.getTime() - 1), amount: 4 },
+        { at: week.to, amount: 8 },
+        { at: new Date(monthRange.from.getTime() - 1), amount: 16 },
+        { at: monthRange.from, amount: 32 },
+        { at: new Date(monthRange.to.getTime() - 1), amount: 64 },
+        { at: monthRange.to, amount: 128 },
+      ];
+      for (const point of points)
+        await inserted(customer.userId, worker.userId, {
+          amount: point.amount,
+          completedAt: point.at,
+        });
+      const within = (range: { from: Date; to: Date }) =>
+        points.filter((x) => x.at >= range.from && x.at < range.to);
+
+      for (const [period, range] of [
+        ['week', week],
+        ['month', monthRange],
+      ] as const) {
+        const res = await http
+          .get(`${V1}/workers/me/earnings?period=${period}`, {
+            token: worker.accessToken,
+          })
+          .expect(200);
+        const expected = within(range);
+        expect({
+          period,
+          from: res.body.from,
+          to: res.body.to,
+          amount: res.body.amount,
+          jobsDone: res.body.jobsDone,
+        }).toEqual({
+          period,
+          from: range.from.toISOString(),
+          to: range.to.toISOString(),
+          amount: expected.reduce((sum, x) => sum + x.amount, 0),
+          jobsDone: expected.length,
+        });
+      }
+    });
+
     it('zero, not an error, before any job; bad period is 422; needs a worker profile but not verification', async () => {
       const customer = await customerIn(t);
       const worker = await verifiedWorkerIn(t, { verified: false }); // still in review

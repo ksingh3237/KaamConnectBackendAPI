@@ -23,8 +23,10 @@ Project setup and commands are in the [root README](../README.md). This folder h
 | 2 Auth & account | **Done**: phone OTP, JWT + rotating refresh tokens, `/me`, global login guard |
 | 3 Profiles, media, verification | **Done**: customer/worker profiles, address book, signed uploads, admin review, worker GPS ping |
 | 4 Jobs, leads, quotes, direct booking, discovery, Socket.IO | **Done**: 16 new routes, live push, benchmark at 5,000 workers / 50,000 jobs |
-| 5 Tracking, arrival, bill, payment, SOS | Next |
-| 6–7 | Not started |
+| 5 Tracking, arrival, bill, payment, SOS | **Done** (SOS delivery to a real receiver is not built or verified) |
+| 5b Arrival-code recovery | **Done**: a customer can issue a new code (3 per assignment, 60 s apart, audited); migration applied to the development database |
+| 6 Reviews, activity extras, earnings, savings | **Done**: reviews and tips, activity ratings, review summary, worker earnings, commission saved. No migration |
+| 7–8 | Not started |
 
 ### Phase 0 deviations from the plan
 - Nest 12's template is **ESM + Vitest + oxlint**; the plan said Jest/ESLint. Docs updated; no functional impact.
@@ -60,4 +62,10 @@ Project setup and commands are in the [root README](../README.md). This folder h
 ### Phase 5 notes
 - Contract: `03-api-spec.md §11`. Architecture: `04-architecture.md §10`. Controls, mutation check and findings: `05-security-testing.md §9`. Roadmap status: `07-roadmap.md`. Current status, known issues (K-26 to K-31) and the next steps: `progress.md`.
 - New optional setting `SOS_WEBHOOK_URL` (required and https in production). No migration.
-- **Not verified yet:** GitHub CI and the idle-machine benchmark.
+- GitHub CI has since passed for Phases 0–5 (see `progress.md` §0.5). **Still not verified:** the idle-machine benchmark and real SOS delivery.
+
+### Phase 6 and arrival-recovery notes
+- Contracts: `03-api-spec.md §11.9` (arrival-code recovery) and `§12` (reviews, earnings, savings). Controls and tests: `05-security-testing.md §10`; the agreed SOS requirements (nothing built) are in `§11`.
+- New migration `20261011150000_arrival_code_reset` (additive: two columns on `jobs`, one enum, the audit table `job_security_events`, one CHECK). Applied to the test database and, after a verified backup, to the development database. Phase 6 needed no migration.
+- No new settings. `COMMISSION_BENCHMARK_RATE` (default 0.20) now feeds `GET /me/savings`.
+- **Not verified yet:** CI on this work (its result is on pull request #2, not recorded here), the idle-machine benchmark, real SOS delivery, real S3.
