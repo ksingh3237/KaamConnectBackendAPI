@@ -16,6 +16,7 @@ REST/JSON, base path `/api/v1`, OpenAPI generated from the DTOs (`/api/docs`, di
 | Errors | `{ "statusCode": 422, "code": "VALIDATION_FAILED", "message": "…", "details": [{ "field": "fee", "issue": "must be > 0" }] }`. Codes are machine-readable; user text stays in the app (en/hi/pa) |
 | Status codes | 200/201/204 · 400 malformed · 401 unauthenticated · 403 wrong role/not owner · 404 (also used instead of 403 to avoid leaking existence) · 409 state conflict · 422 validation · 429 throttled |
 | Idempotency | `PUT` upserts are idempotent; create-job accepts optional `Idempotency-Key` header (double-tap on "Broadcast") |
+| Request id | Every response carries `X-Request-Id`. A plain value sent by the client or a proxy (8 to 64 characters of letters, digits, `.`, `_`, `-`) is kept; anything else is replaced by a new UUID. Quote it when reporting a problem: it is in the server's request log line and in the log line of any 5xx error |
 
 ## 2. Endpoints by screen
 
@@ -258,7 +259,7 @@ Everything is under `/api/v1` and **requires `Authorization: Bearer <accessToken
 | `POST /auth/otp/request` `{phone, channel?}` | `202 {resendAfterSec: 30, expiresInSec: 300}` | Identical answer whether or not the number has an account. A new code replaces the previous one |
 | `POST /auth/otp/verify` `{phone, code}` | `200 {accessToken, refreshToken, expiresIn: 900, isNewUser, user:{id, phone, language, hasCustomerProfile, hasWorkerProfile}}` | `isNewUser` is true only for the call that created the account. Use the two `has…Profile` flags to decide whether onboarding is needed |
 | `POST /auth/refresh` `{refreshToken}` | `200 {accessToken, refreshToken, expiresIn}` | **Rotates**: the old refresh token is spent; store the new one |
-| `POST /auth/logout` `{refreshToken}` | `204` | Auth required. Ends that login (all its tokens). Idempotent |
+| `POST /auth/logout` `{refreshToken}` | `204` | Auth required. Ends that login (all its tokens). Idempotent. **Also allowed for a disabled account** (K-37): the only protected route that is |
 | `GET /me` | `200 {id, phone, language, customer, worker}` | `customer`/`worker` are `null` until Phase 3 creates profiles |
 | `PATCH /me` `{language}` | `200` same as `GET /me` | Only `en`, `hi`, `pa`. Any other field → `422` |
 
@@ -332,7 +333,7 @@ All routes need a login. "Profile" in the last column means the caller must alre
 ### Verification rules
 - A new worker is `PENDING`. **Production (`WORKER_VERIFICATION_MODE=manual`):** only an admin can set `VERIFIED`, and only when both Aadhaar images exist (`409 DOCUMENTS_MISSING`). **Development (`auto`):** becomes `VERIFIED` automatically once both images are uploaded.
 - Editing a `REJECTED` profile, or replacing an Aadhaar image on a `VERIFIED`/`REJECTED` one, sends it back to `PENDING` (in `auto` mode it is re-approved at once).
-- **Decided (D-8), not built yet:** changing `fullName` on a `VERIFIED` worker also sends it back to `PENDING`, but only when the normalised name (trimmed, spaces collapsed, case-insensitive) differs from the stored one. A save that re-sends the same name changes nothing. The same applies to `photoKey` (Q-22): a different key sends it back to `PENDING`, the same key changes nothing, and removing the photo (`null`) does not trigger review.
+- **Built (D-8, Q-22), 2026-10-11:** changing `fullName` on a `VERIFIED` worker also sends it back to `PENDING`, but only when the normalised name (trimmed, spaces collapsed, case-insensitive) differs from the stored one. A save that re-sends the same name changes nothing. The same applies to `photoKey` (Q-22): a different key sends it back to `PENDING`, the same key changes nothing, and removing the photo (`null`) does not trigger review. In `auto` mode the existing auto-approval re-verifies at once when both Aadhaar images exist. A worker under review disappears from discovery and the lead feed (`403 NOT_VERIFIED` on `verified` routes) but keeps every job already assigned to them, because those routes check ownership, not verification. Adding a first photo to a profile that had none counts as a different photo.
 - **Decided (D-9), not built yet (Phase 7):** Aadhaar images are deleted `AADHAAR_RETENTION_DAYS` (default 7) after the VERIFIED/REJECTED decision; afterwards `documents.AADHAAR_FRONT/BACK` read `false` and a re-review needs both images uploaded again.
 - Rejecting or re-submitting also takes effect immediately for guarded routes: a worker who loses `VERIFIED` gets `403 NOT_VERIFIED` on the next live-location call.
 - Admin routes answer **404** (not 403) to everyone who is not an active admin. Make someone an admin by hand: `UPDATE users SET is_admin = true WHERE phone = '+91…';`
@@ -658,3 +659,12 @@ No database migration was needed: the `reviews` table, the worker's `rating_sum`
 ### 12.4 What the app must do
 
 Offer the review screen when a COMPLETED job has `canReview: true`; send `rating` (default 5), the chosen `tags` and the optional tip; show "Rated x.x" from `rating`; show the worker's `reviews` summary on the profile; show "earned today" from `/workers/me/earnings` and disclose `benchmarkRate` next to "Total saved".
+
+## 13. Contract changes in Phase 7, Milestone A (2026-10-11)
+
+| Change | Detail |
+|---|---|
+| **`403 ACCOUNT_DISABLED` on every protected route** (K-5) | A user whose account is disabled (`users.is_active = false`) is refused on **every route that needs a login**, even while their access token is still valid, and from the very next request: the check is read from the database each time. The body is the usual `{statusCode:403, code:"ACCOUNT_DISABLED", message}`. Public routes (login, refresh, health, signed dev uploads) are not affected. Admin routes keep answering `404` to everyone who is not an active admin, a disabled admin included. `GET /me`, which used to answer `401` for a disabled account, now answers `403 ACCOUNT_DISABLED`; `POST /auth/refresh` already answered the same code. **The app should** treat it as "this account is disabled": stop calling, show the disabled-account screen, and clear its tokens. **The one exception is `POST /auth/logout` (K-37):** it still works for a disabled account, so the app can always end a session. A valid access token is still required (no token or a forged one is `401`); the call answers `204`, revokes the refresh family named in the body, and only if that token belongs to the caller. After the account is re-enabled the old refresh token answers `401 REFRESH_REUSED`, exactly as after an active user's logout. Every other route stays refused. |
+| **Quotes of a worker under review are hidden** (K-36) | `GET /jobs/:id/offers` lists a quote only if it is ACCEPTED, or PENDING from a worker who is VERIFIED. The same rule applies to every "how many quotes" number: `offersCount` on `GET /jobs/:id`, on `GET /customers/me/jobs` rows, and on the lead cards workers see. "Fastest" is judged among the quotes shown. A hidden quote returns by itself when its worker is verified again; nothing is deleted. The worker still sees their own waiting quote in `GET /workers/me/jobs` |
+| **`409 OFFER_UNAVAILABLE`** (K-36) | `POST /jobs/:id/offers/:offerId/accept` for a quote whose worker is not VERIFIED. The message says only that the quote is not available right now; it deliberately does not say why. Nothing changes (the job stays OPEN, the other quotes stay PENDING). **The app should** refetch the quote list and let the customer choose again. An already-accepted quote is never affected, and a worker who was chosen while verified keeps the job even if they are later sent back for review |
+| Request id | Every response carries `X-Request-Id` (section 1) |

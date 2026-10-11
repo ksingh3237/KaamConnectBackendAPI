@@ -7,8 +7,9 @@ import { TokenService } from '../token.service.js';
 
 /**
  * Global guard: every HTTP route needs `Authorization: Bearer <access token>` unless it is
- * marked @Public(). It checks the signature and expiry only (no database hit); a user disabled
- * mid-session is cut off at the next refresh (access tokens live 15 minutes).
+ * marked @Public(). It checks the signature and expiry only (no database hit). Whether the account is
+ * still active is decided right after, by ProfileGuard, from the database, so a user disabled
+ * mid-session is refused (403 ACCOUNT_DISABLED) on the very next request.
  */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {

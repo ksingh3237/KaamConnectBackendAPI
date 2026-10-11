@@ -1,11 +1,18 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
+import { vi } from 'vitest';
 import { AllExceptionsFilter } from './all-exceptions.filter.js';
 import { AppException } from '../exceptions/app.exception.js';
 
-function run(exception: unknown) {
+function run(exception: unknown, requestId: string | null = 'req-test-0001') {
   const json = vi.fn();
   const status = vi.fn().mockReturnValue({ json });
-  const host = { switchToHttp: () => ({ getResponse: () => ({ status }) }) };
+  // A real Nest HTTP host always carries the request as well as the response.
+  const host = {
+    switchToHttp: () => ({
+      getResponse: () => ({ status }),
+      getRequest: () => ({ requestId: requestId ?? undefined }),
+    }),
+  };
   new AllExceptionsFilter().catch(exception, host as never);
   return { status: status.mock.calls[0]?.[0], body: json.mock.calls[0]?.[0] };
 }
@@ -70,5 +77,32 @@ describe('AllExceptionsFilter', () => {
       message: 'Something went wrong',
     });
     expect(JSON.stringify(body)).not.toContain('hunter2');
+  });
+
+  describe('what is written to the log for an unexpected error', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('carries the request id, so the line can be matched with the request log', () => {
+      const error = vi
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      run(new Error('boom'), 'req-test-0042');
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(String(error.mock.calls[0]![0])).toMatch(
+        /^req=req-test-0042 Error: boom/,
+      );
+    });
+
+    it('shows a dash when there is no request id, and stays silent for expected domain errors and 4xx', () => {
+      const error = vi
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      run(new Error('boom'), null);
+      expect(String(error.mock.calls[0]![0])).toMatch(/^req=- Error: boom/);
+      error.mockClear();
+      run(new AppException('DB_UNAVAILABLE', 503, 'down'));
+      run(new NotFoundException('nope'));
+      expect(error).not.toHaveBeenCalled();
+    });
   });
 });

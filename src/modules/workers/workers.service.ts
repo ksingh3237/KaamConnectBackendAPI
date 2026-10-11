@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { reviewEffect } from './verification-rules.js';
 import { AppException } from '../../common/exceptions/app.exception.js';
 import {
   DocumentType,
@@ -87,8 +88,8 @@ export class WorkersService {
   }
 
   /**
-   * Worker onboarding "Save". Creates the profile or replaces its fields, and re-opens a rejected
-   * profile for review. The terms-accepted time is set once, on the first save.
+   * Worker onboarding "Save". Creates the profile or replaces its fields, and sends a rejected
+   * profile (any edit) or a verified one whose name or photo changed (D-8) back for review. The terms-accepted time is set once, on the first save.
    */
   async upsert(userId: string, dto: UpsertWorkerDto): Promise<WorkerView> {
     await this.validateReferences(userId, dto);
@@ -97,7 +98,7 @@ export class WorkersService {
     await this.prisma.$transaction(async (tx) => {
       const existing = await tx.workerProfile.findUnique({
         where: { userId },
-        select: { verificationStatus: true },
+        select: { verificationStatus: true, fullName: true, photoKey: true },
       });
       const fields = {
         fullName: dto.fullName,
@@ -115,7 +116,7 @@ export class WorkersService {
       await tx.workerProfile.upsert({
         where: { userId },
         create: { userId, ...fields, termsAcceptedAt: new Date() },
-        update: { ...fields, ...resubmission(existing?.verificationStatus) },
+        update: { ...fields, ...reviewEffect(existing, dto) },
       });
       await replaceTrades(tx, userId, dto.trades);
       await this.verification.autoApproveIfEligible(tx, userId);
@@ -129,7 +130,12 @@ export class WorkersService {
     await this.prisma.$transaction(async (tx) => {
       const existing = await tx.workerProfile.findUnique({
         where: { userId },
-        select: { verificationStatus: true, radiusKm: true },
+        select: {
+          verificationStatus: true,
+          fullName: true,
+          photoKey: true,
+          radiusKm: true,
+        },
       });
       if (!existing)
         throw new AppException(
@@ -157,7 +163,7 @@ export class WorkersService {
           visitingFee: dto.visitingFee,
           vehicle: dto.vehicle,
           upiId: dto.upiId,
-          ...resubmission(existing.verificationStatus),
+          ...reviewEffect(existing, dto),
         },
       });
       if (dto.trades) await replaceTrades(tx, userId, dto.trades);
@@ -381,13 +387,6 @@ function assertScheduledRadius(
       ],
     );
   }
-}
-
-/** Editing a rejected profile counts as asking for another review. */
-function resubmission(status: VerificationStatus | undefined) {
-  return status === VerificationStatus.REJECTED
-    ? { verificationStatus: VerificationStatus.PENDING, rejectionReason: null }
-    : {};
 }
 
 /** The first id is the primary trade. Delete-then-insert keeps the "one primary" index happy. */

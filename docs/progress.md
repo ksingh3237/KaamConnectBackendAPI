@@ -2,7 +2,9 @@
 
 **Status as of 2026-10-11 (updated after Phase 6 and arrival-code recovery).** Every statement below was checked against the repository on that date (commands are listed in §9). Where something is written but not proven, it says so. Nothing incomplete is marked done.
 
-**One-line summary:** Phases 0–6 are built and green locally: foundation, database, login, profiles/uploads/verification, the marketplace core, scheduling and availability, fulfilment (arrival, bill, completion, payment, tracking, SOS, worker back-out), and now **arrival-code recovery** (a customer can issue a new code, 3 per assignment, 60 s apart, fully audited) and **Phase 6** (reviews and tips, activity extras, worker earnings, "commission saved"). **CI is verified for Phases 0–5:** the GitHub Actions run on PR #1 succeeded (17 steps), and the run after PR #1 was merged into `main` also succeeded (21 steps) (§0.5); **the arrival-recovery and Phase 6 work was not through CI when this report was written**: its result is recorded on the new pull request, not here. **Not verified:** the idle-machine performance comparison (pending), real delivery of an SOS alert (no receiver exists), real S3. **Dev database:** the `arrival_code_reset` migration was applied to `KaamConnect` on 2026-10-11 after a verified backup, and the extended built-app smoke test (including the arrival-code reset, a review, earnings and savings) passed against it. PR #1 **was merged into `main` on 2026-10-11 at 03:18:55 UTC, not by me** (I was told not to merge it and did not). The arrival-recovery work, Phase 6 and the smoke-test extension are on the branch `feature/phase-6-and-arrival-recovery` as five commits (you approved the plan) plus a sixth follow-up commit made after the code review (documentation corrections, a schema comment, 11 more tests), reviewed through **pull request #2 into `main`, which is open and not merged**.
+**One-line summary:** Phases 0–6 are built and green locally: foundation, database, login, profiles/uploads/verification, the marketplace core, scheduling and availability, fulfilment (arrival, bill, completion, payment, tracking, SOS, worker back-out), and now **arrival-code recovery** (a customer can issue a new code, 3 per assignment, 60 s apart, fully audited) and **Phase 6** (reviews and tips, activity extras, worker earnings, "commission saved"). **CI is verified for Phases 0–5:** the GitHub Actions run on PR #1 succeeded (17 steps), and the run after PR #1 was merged into `main` also succeeded (21 steps) (§0.5); **CI also passed for the arrival-recovery and Phase 6 work**: run 38118304386 on PR #2's final commit `2552314` (all 17 steps) and run 38120336005 on `main` after the merge. **Not verified:** the idle-machine performance comparison (pending), real delivery of an SOS alert (no receiver exists), real S3. **Dev database:** the `arrival_code_reset` migration was applied to `KaamConnect` on 2026-10-11 after a verified backup, and the extended built-app smoke test (including the arrival-code reset, a review, earnings and savings) passed against it. PR #1 **was merged into `main` on 2026-10-11 at 03:18:55 UTC, not by me** (I was told not to merge it and did not). The arrival-recovery work, Phase 6 and the smoke-test extension are on the branch `feature/phase-6-and-arrival-recovery` as five commits (you approved the plan) plus a sixth follow-up commit made after the code review (documentation corrections, a schema comment, 11 more tests), and were merged into `main` by you on 2026-10-11 at 07:07:51 UTC (merge commit `7e94da2`; I did not merge it) through **pull request #2**.
+
+**Phase 7, Milestone A (2026-10-11): committed and PUSHED on branch `feature/phase-7-milestone-a`, eight commits on top of `2552314` (whose content is what `main` now holds, `7e94da2`), open as PULL REQUEST #3 into `main` (opened by you at 09:05:39 UTC; not merged; I did not create or merge it).** **GitHub CI: run [38127145264](https://github.com/ksingh3237/KaamConnectBackendAPI/actions/runs/38127145264) (event `pull_request`, head `89a3964`, the seventh commit) completed with conclusion `success`, all 18 steps including the coverage-thresholds step; that is the only CI result for this branch, and it predates the eighth commit.** The eighth commit (K-37) has its own run, which is read separately and is not claimed here. The branch contains: measured and CI-enforced coverage (merged 97.5 % of lines, 89.2 % of branches); D-8 worker re-verification; masked request logging; an IDOR matrix over all 34 routes with an id; a `ProfileGuard` rewrite; and the fixes for **K-5** (`403 ACCOUNT_DISABLED` on every protected route), **K-36** (quotes of a worker under review hidden and not acceptable `409 OFFER_UNAVAILABLE`) and **K-37** (a disabled account can still log out, so its refresh tokens are revoked: the eighth commit, §0.9). Standing limits until you say otherwise: do not merge PR #3, do not create another PR, do not modify `main`, do not start Milestone B (D-9, account deletion, load and EXPLAIN, OpenAPI, release engineering). Milestone A did not touch D-9, account deletion, SOS, S3, MSG91 or the benchmark.
 
 ---
 
@@ -31,7 +33,7 @@
 | **Phase 6: activity extras** (`rating` / `reviewed` on completed rows for both sides, `review` / `canReview` on the job, review summary with star split and latest ten on `GET /workers/:id`) | **Complete, tested locally** | `phase6.e2e-spec` |
 | **Phase 6: worker earnings** (`GET /workers/me/earnings?period=today\|week\|month`, Asia/Kolkata days) and **savings** (`GET /me/savings`, rate `COMMISSION_BENCHMARK_RATE`, default 0.20) | **Complete, tested locally.** Day boundaries unit-tested at 23:59:59.999 / 00:00 IST | `phase6.e2e-spec` (23 tests in total), `ist-time.spec`, `earnings.service.spec`; five mutation checks caught |
 | **Not built:** worker payment confirmation (`/payment/confirm`), admin SOS acknowledge and the `sos.acknowledged` event, PDF receipts, SOS retry/queue, rescheduling a booking, showing the service default duration to the app | **Incomplete / not built** (each confirmed absent in the code today) | §3.2, K-27 to K-29 |
-| **Approved earlier but still not built (outside Phase 5):** **D-8** a name or photo change on a VERIFIED worker re-opens review; **D-9** Aadhaar images deleted `AADHAAR_RETENTION_DAYS` after the decision | **Not built.** Checked in the code today: `resubmission()` handles only REJECTED profiles and there is no retention job | §4.3 |
+| **Approved earlier but still not built (outside Phase 5):** **D-9** Aadhaar images deleted `AADHAAR_RETENTION_DAYS` after the decision | **Not built.** Checked in the code today: there is no Aadhaar retention job (D-9). D-8 was built in Phase 7, Milestone A | §4.3 |
 
 ### 0.2 Database migrations
 
@@ -49,8 +51,8 @@ Phase 5 and Phase 6 added **no** migration; arrival-code recovery added one, app
 
 | Check | Result |
 |---|---|
-| Unit (`npm test`) | **236 passed, 0 failed**, 28 files |
-| End-to-end (`npm run test:e2e`, real PostgreSQL and WebSockets) | **579 passed, 0 failed, 0 skipped, 0 todo**, 21 files (was 534 / 19: +16 arrival-code reset, +6 database integrity, +23 Phase 6), run 2026-10-11 after the review follow-up |
+| Unit (`npm test`) | **299 passed, 0 failed**, 33 files (after Phase 7 Milestone A; 236 / 28 before) |
+| End-to-end (`npm run test:e2e`, real PostgreSQL and WebSockets) | **718 passed, 0 failed, 0 skipped, 0 todo**, 26 files (after Milestone A; 579 / 21 before), run with coverage |
 | Pending or failing tests | **None.** A search finds no `it.todo`, `it.skip` or `describe.skip` in `src/` or `test/`. The 22 Phase 5 `todo` entries became 27 real tests. Re-checked after Phase 6 with escaped patterns: 0 matches |
 | Type-check, lint (oxlint), Prettier check, `npm run build`, `npm audit --omit=dev` | all clean; 0 vulnerabilities |
 | Built-app smoke test (`scripts/smoke.sh`, through COMPLETED) | **Passed 2026-10-11 against the migrated dev database**, after I extended it with an arrival-code reset (new code issued, a second reset throttled with 429, the old code refused, arrival with the new code), a review (a second one refused with 409), the worker profile showing it, worker earnings and commission saved. Its data was then removed in one transaction that committed only because the table counts matched the snapshot taken before (reference data only), so dev is back to 0 users and 0 jobs. Three uploaded image files remain in the git-ignored `.local-storage/` folder. **Not yet run in CI** (it will run there on a fresh database once pushed) |
@@ -69,12 +71,13 @@ Phase 5 and Phase 6 added **no** migration; arrival-code recovery added one, app
 | | Fact (checked today) |
 |---|---|
 | Branch / HEAD | `main` at `d19c4fb`, the merge of PR #1 (2026-10-11 03:18:55 UTC). Before that merge it was `8d808e5` ("first commit"; two docs-only commits, 10 files) |
-| Remote | `origin = https://github.com/ksingh3237/KaamConnectBackendAPI.git`. **PR #1 is merged:** `main` is `d19c4fb` ("Merge pull request #1"), merged 2026-10-11 03:18:55 UTC by a GitHub user action, not by me. `main` therefore now holds Phases 0–5, **but its copy of this report is the stale one** (it still says CI never ran and that the work is uncommitted). The branch `feature/backend-phases-0-5` also holds one later docs-only commit, `6665ea0`, that is **not in `main`** (the PR was already closed when I pushed it); it reaches `main` with the next PR |
+| Remote | `origin = https://github.com/ksingh3237/KaamConnectBackendAPI.git`. **`main` is `7e94da2`** (merge of PR #2, 2026-10-11 07:07:51 UTC): you merged PR #1 (`d19c4fb`, 03:18:55 UTC) and PR #2 yourself; I did not merge either. `main`'s content equals PR #2's final commit `2552314`. Branches on the remote: `main`, `feature/backend-phases-0-5` (`6665ea0`, merged), `feature/phase-6-and-arrival-recovery` (`2552314`, merged) and `feature/phase-7-milestone-a` (eight commits; **not merged; PR #3 is open**) |
 | Commits on the branch | `7c4b8c4` scaffold, tooling and CI workflow; `ce817a7` schema, 3 migrations and seed; `84dc86f` backend phases 0–5 with tests; `fd3f6ce` docs. Working tree clean after the push. The reviewed file set contained no secrets (every value in the git-ignored `.env` was searched for in the committed files: 0 matches); a local path in this report was replaced with a generic description before the commit. Edits made after `fd3f6ce` (this report and the roadmap) are uncommitted until you ask |
 | GitHub Actions | **Verified.** Run [38086756115](https://github.com/ksingh3237/KaamConnectBackendAPI/actions/runs/38086756115), event `pull_request`, head commit `fd3f6ce` (the last commit pushed), status completed, **conclusion success**, about 2 min 37 s. Read from the GitHub API, step by step: checkout, setup-node, `npm ci`, create test database, **btree_gist check**, lint, typecheck, unit tests, **e2e tests against the PostgreSQL 18 service container**, build, production audit, migrations on a fresh database, **drift check**, seed, **smoke test of the built app** — all succeeded. It is the only run so far (total_count 1) |
 | Push-to-`main` run | **Verified.** Run [38107978974](https://github.com/ksingh3237/KaamConnectBackendAPI/actions/runs/38107978974), event `push`, branch `main`, head `d19c4fb`, status completed, **conclusion success**, 21 steps, none unsuccessful, about 2 min 52 s (read from the GitHub API). This closes the gap "the workflow has not run on a push to `main`" |
 | What the runs settled | The `btree_gist` assumption (official `postgres:18` image, `POSTGRES_USER` superuser) is confirmed on GitHub twice. **Still not verified:** `btree_gist` creation by a non-superuser role on RDS |
-| New work (branch `feature/phase-6-and-arrival-recovery`) | Created from `6665ea0`, five commits approved by you: (1) `feat(db)` schema and migration; (2) `feat` arrival-code recovery; (3) `feat` Phase 6 reviews, earnings and savings; (4) `test` extended smoke test; (5) `docs`. A sixth follow-up commit was added after the code review. It is reviewed through **pull request #2 into `main`; the PR is open and not merged**. The commit hashes and the CI result are on that PR and are deliberately **not** written into this report, because a commit cannot contain its own hash and the CI result did not exist when it was written |
+| New work (branch `feature/phase-6-and-arrival-recovery`) | Created from `6665ea0`, five commits approved by you plus a sixth follow-up commit (`2552314`) after the code review. **Pull request #2 was merged into `main` by you on 2026-10-11 at 07:07:51 UTC (merge commit `7e94da2`; I did not merge it).** CI passed on the PR (run 38118304386, 17 steps) and on `main` (run 38120336005). `main`'s content equals the PR's final commit: it only added the two merge commits |
+| Milestone A branch (`feature/phase-7-milestone-a`) | **Pushed 2026-10-11, no force push, a brand-new remote branch.** The first seven commits, oldest first: `9a32012` test: measure coverage and enforce the documented thresholds in CI; `d9cf7f8` feat: D-8 re-verification when a verified worker changes name or photo; `cab5e60` feat: masked logging and one log line per request; `c4ba0fb` fix: K-5 refuse disabled accounts on every protected route (403 ACCOUNT_DISABLED); `ac7c22a` fix: K-36 hide and refuse quotes of workers who are under review; `614d603` test: IDOR matrix over every route that takes an id in its path; `89a3964` docs: Phase 7 Milestone A. GitHub's own comparison with `main` at that point: 7 commits ahead, 2 behind (the two merge commits, which carry the same tree), 39 files. **You opened pull request [#3](https://github.com/ksingh3237/KaamConnectBackendAPI/pull/3) (base `main`, head `feature/phase-7-milestone-a`) at 09:05:39 UTC on 2026-10-11, 5 seconds before the CI run started.** Run [38127145264](https://github.com/ksingh3237/KaamConnectBackendAPI/actions/runs/38127145264): event `pull_request`, head `89a3964`, status completed, **conclusion success**, one job `verify`; steps 1–18 all `success`: set up job, initialise containers, checkout, setup-node, `npm ci`, create the test database, btree_gist check, lint, typecheck, unit tests, e2e tests (real PostgreSQL), **coverage thresholds**, build, production dependency audit, migrations on a fresh database, drift check, seed, smoke test of the built app (read through the GitHub API). PR #3 was open and not merged (`mergeable_state: clean`) when last read. The eighth commit, K-37, was pushed afterwards on your authorisation (PR #3, no new PR); do not merge until its run succeeds |
 
 ### 0.6 Pending verification: the idle-machine benchmark
 
@@ -86,17 +89,61 @@ Not done. Every run so far had Android Studio, an emulator, VS Code and Chrome o
 |---|---|
 | **Service durations (D-14)** | Support is built and tested. **0 of 8 services have a value**, so every job is 90 minutes. Needs minutes per service from you; set with `PATCH /admin/service-categories/:id/duration` or `defaultDurationMin` in `prisma/data/service-categories.ts` plus a seed run |
 | **Verified area coordinates (Q-18)** | **0 of 13 areas have coordinates.** Until they do (or the customer's address carries GPS) matching falls back to "same city", travel gaps assume 30 minutes, and tracking shows no distance or ETA (K-4, K-26) |
-| D-8 name/photo change re-opens review | approved, **not built** |
+| D-8 name/photo change re-opens review | **built and pushed** (Milestone A, commit `d9cf7f8`); CI run 38127145264 on PR #3 passed on a later commit that contains it |
 | D-9 Aadhaar deletion (7 days, configurable) | approved, **not built**; counsel has not confirmed the rule or whether Aadhaar images may be collected at all |
 | Arrival-code recovery | **built, applied to dev and smoke-tested** (§0.4) |
 | SOS receiver and monitoring process | **open**: no receiver selected, nobody named; production SOS not enabled |
 | Real S3 bucket test (K-3), hosting (Q-15), MSG91/DLT (production cannot boot without an SMS sender) | open, Phase 7 |
 | Frontend work (G-14 to G-20) | outside this repository |
-| Reviews, tips, earnings, savings (Q-8) | **Phase 6 built and tested locally** (tips are record-only); not yet through CI |
+| Reviews, tips, earnings, savings (Q-8) | **Phase 6 built and tested locally** (tips are record-only); merged in PR #2, CI passed (§0.5) |
 
 ### 0.8 Exact next steps
 
-See §8 for the ordered list. In one line: **no technical blocker; the open items are decisions and verifications that need you** (review and apply the migration, choose the SOS receiver, supply area coordinates and per-service minutes, an idle machine for the benchmark, approval to commit and push the new work so CI can run on it).
+See §8 for the ordered list. In one line: **no technical blocker; the open items are reading the CI run for the K-37 commit on PR #3, your decision to merge it, and the things only you can supply or decide**: an SOS receiver and an on-call person, verified area coordinates, per-service minutes (90 stays the default), an idle machine for the benchmark, hosting and the SMS sender for Milestone B.
+
+### 0.9 Phase 7, Milestone A (committed and pushed; PR #3 open; CI passed on the seventh commit, the eighth commit's run is read separately)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Coverage measured and enforced (`9a32012`) | **Complete; pushed.** Merged lines: overall 97.5 % (2258/2315), auth 94.2 % (163/173), jobs 98.9 % (356/360), offers 98.0 % (249/254), reviews 97.3 % (36/37); branches overall 89.2 % (1378/1544); gates 70 / 85 on lines and 70 on branches enforced by `scripts/coverage-check.mjs` and a new CI step. The workflow YAML was parsed with a real parser (0 errors, 16 steps, every script it calls exists) but **has never run on GitHub** | `npm run test:cov`, `05-security-testing.md §12.1` |
+| D-8 re-verification (`d9cf7f8`) | **Complete; pushed** | `verification-rules.ts`; 13 unit + 16 e2e tests; §12.2 |
+| Masked request logging, K-10 (`cab5e60`) | **Complete; pushed** | `common/logging/*`; 28 unit tests (+2 in the exception-filter spec) and 6 e2e tests; §12.3 |
+| IDOR matrix (`614d603`) | **Complete; pushed.** 100 tests, 34 routes classified, no ownership defect found | `test/idor-matrix.e2e-spec.ts`; §12.4 |
+| `ProfileGuard` review | **Reviewed and rewritten; 20 unit tests.** Its two findings are fixed and pushed: K-5 (a disabled user kept working with a valid token) and K-36 (quotes of a worker under review stayed acceptable). A third finding, K-37, is fixed in the eighth commit (below); the guard now has 26 unit tests | §12.5, §12.7, §12.8 |
+| K-5 fix: `403 ACCOUNT_DISABLED` (`c4ba0fb`) | **Complete; pushed.** One lookup per protected request; every route the router registers is probed with a disabled user's still-valid token (8 e2e tests); admin routes keep 404; `GET /me` now answers 403 instead of 401 (consistent, no change needed) | `profile.guard.ts`; §12.7 |
+| K-36 fix: hidden and unacceptable quotes (`ac7c22a`) | **Complete; pushed.** One shared visibility rule in the list, three counts and the accept check; `409 OFFER_UNAVAILABLE` (9 e2e tests) | `offers/visible-offers.ts`; §12.7 |
+| K-37 fix: a disabled account can log out (eighth commit) | **Complete; pushed to PR #3.** `@AllowDisabledAccount()` on `POST /auth/logout`; `ProfileGuard` skips only the `ACCOUNT_DISABLED` refusal for a marked route and ignores the marker when a profile or admin is required (fails closed). 6 guard unit tests, 6 e2e tests (5 logout scenarios and the exact exception list) | `allow-disabled-account.decorator.ts`, `profile.guard.ts`, `auth.controller.ts`; §12.8 |
+| Totals of the eighth commit (working tree equal to the commit, not an isolated worktree) | **305 unit (33 files) and 724 e2e (26 files) passed in one `npm run test:cov` run, exit 0** (299 and 718 plus the 6 and 6 new tests); coverage gate passed: lines overall 97.5 % (2262/2319), auth 94.2 %, jobs 98.9 %, offers 98.0 %, reviews 97.3 %; branches overall 89.2 % (1382/1549); typecheck, build exit 0; lint exit 0 with `--deny-warnings`; prettier `--check` clean; `npm audit --omit=dev` 0 vulnerabilities | this session |
+| Totals (seventh commit `89a3964`, in an isolated worktree) | **299 unit (33 files) and 718 e2e (26 files) passed in one `npm run test:cov` run, exit 0**; lines overall 97.5 % (2258/2315), branches 89.2 % (1378/1544); typecheck, prettier and build exit 0; lint 0 warnings; `npm audit --omit=dev` 0 vulnerabilities. The same figures were measured earlier on the working tree | this session |
+| Not done | **GitHub CI on the eighth commit** (its run is read separately); the idle-machine benchmark (the extra `ProfileGuard` lookup and the request logger are unmeasured); D-9, account deletion and everything in Milestones B onward | – |
+
+**The first seven commits** (oldest first, on top of `2552314`): 1. `9a32012` test: measure coverage and enforce the documented thresholds in CI; 2. `d9cf7f8` feat: D-8 re-verification when a verified worker changes name or photo; 3. `cab5e60` feat: masked logging and one log line per request; 4. `c4ba0fb` fix: K-5 refuse disabled accounts on every protected route (403 ACCOUNT_DISABLED); 5. `ac7c22a` fix: K-36 hide and refuse quotes of workers who are under review; 6. `614d603` test: IDOR matrix over every route that takes an id in its path; 7. `89a3964` docs: Phase 7 Milestone A. Every commit has the co-author trailer; no commit touches a migration or `prisma/`.
+
+**Verification before the push** (each commit checked on its own in a throwaway git worktree that shared `node_modules` through a junction; the worktree, its copied `.env` and the junction were removed afterwards and the real `node_modules` is intact). Each commit: typecheck, prettier, build exit 0 and lint 0 warnings.
+
+| # | Commit | Unit tests | e2e tests run on that commit |
+|---|---|---|---|
+| 1 | `9a32012` coverage gates | 236 (28 files) | 27 (db-constraints, seed); `test:cov:unit` wrote its report; `coverage:check` without an e2e report exits 2 as designed |
+| 2 | `d9cf7f8` D-8 | 249 (29) | 121 (D-8, workers, admin, discovery) |
+| 3 | `cab5e60` masked logging | 279 (32) | 52 (request-logging, app, auth) |
+| 4 | `c4ba0fb` K-5 | 299 (33) | 141 (account-disabled, auth, admin, realtime, catalog, customers) |
+| 5 | `ac7c22a` K-36 | 299 (33) | 188 (quotes-under-review, leads-offers, jobs, direct-booking, scheduling) |
+| 6 | `614d603` IDOR matrix | 299 (33) | 100 (idor-matrix) |
+| 7 | `89a3964` docs, **full suite** | **299 (33)** | **718 (26 files), `npm run test:cov` exit 0, coverage gate passed** |
+
+**On GitHub (checked through the public API after the push, then again before the eighth commit):** branch `feature/phase-7-milestone-a` existed at `89a3964`; the comparison with `main` was 7 ahead / 2 behind (merge commits only, same tree) with 39 files. When I first checked it right after the push, it had 0 pull requests and 0 workflow runs; **you then opened PR #3 and run 38127145264 succeeded on `89a3964`** (§0.5). The documents had still said "no PR, CI not run" until this commit; that was stale and is corrected here.
+
+**K-37, reproduction (confirmed by an experiment that was not committed; before the fix):**
+1. Log in as an active user and keep the access token and the refresh token.
+2. Set `users.is_active = false` for that user in the database.
+3. `POST /api/v1/auth/logout` with `Authorization: Bearer <access token>` and body `{"refreshToken":"<refresh token>"}`. Observed: **`403 ACCOUNT_DISABLED`** (expected for a logout: 204).
+4. Look at the user's `refresh_tokens` rows: `revoked_at` is still NULL.
+5. Set `users.is_active = true` again.
+6. `POST /api/v1/auth/refresh` with the same refresh token. Observed: **`200` with a new token pair**, so the session the user tried to end is alive.
+
+Baselines from the same experiment: an **active** user logging out gets 204, the row is revoked and a later refresh answers 401 (unchanged, secure). A refresh attempted while the account is disabled answers 403, **revokes** the token family, and a later refresh after re-enabling answers 401. `GET /me` for a disabled account answers `403 ACCOUNT_DISABLED` (was 401); that is consistent and needs no change.
+
+**K-37, the fix (eighth commit, `fix: K-37 let a disabled account log out (revoke its own refresh tokens)`):** a metadata decorator `@AllowDisabledAccount()` (`common/decorators/allow-disabled-account.decorator.ts`) is on the logout handler, and `ProfileGuard` skips only the `ACCOUNT_DISABLED` refusal for a marked route. **One deviation from the plan above, on purpose:** the guard keeps its single primary-key lookup instead of skipping it, so a valid token for a user that no longer exists is still `401` (nothing about that behaviour changes). The marker fails closed: it is ignored on a route that also asks for a profile or admin rights. A valid access token is still required, and logout still revokes only a refresh family that belongs to the caller (`row.userId === userId` in `token.service.ts`), so it cannot widen anyone's access. After re-enabling, the old refresh token answers `401 REFRESH_REUSED`, which is how a revoked token answers after an active user's logout too (my plan said `REFRESH_INVALID`; the test showed the real, consistent code). Tests: 6 guard unit tests; 6 e2e tests in `account-disabled.e2e-spec.ts` (exact exception list `POST /auth/logout`; disabled logout 204 and revoked; only the named login revoked; another user's token not revoked; no or forged token 401; still 403 elsewhere afterwards). Mutation checks (§12.8): all caught. Docs updated: `03-api-spec.md §13` and the logout row in `§7`, `05-security-testing.md §12.5` and new `§12.8`, the roadmap, the READMEs and this report.
 
 ---
 
@@ -111,9 +158,9 @@ See §8 for the ordered list. In one line: **no technical blocker; the open item
 | 4 | Jobs, worker discovery, leads, quotes, direct booking, Socket.IO push | **Done** (see §3 for exactly what; Idempotency-Key and search `q` deferred) | `src/modules/{jobs,offers,matching,realtime}/`, `workers/discovery/` |
 | 4b | **Scheduling and availability** (requested 2026-10-10, decisions D-11 to D-14 approved 2026-10-11): `scheduledFor`, booking windows, overlap + travel-gap checks, one in progress + many future bookings, lead accept/decline, `worker_leads` duplicate guard, future-work radius (opt-in), location catch-up, worker calendar, per-service default job length | **Done and applied** to the test and the dev database. **Not covered:** the Phase 5 endpoints that start and finish work, and a worker backing out (K-22) | `src/modules/scheduling/`, `offers/lead-catch-up.service.ts`, migrations `20261010180000_scheduling_and_availability` and `20261011090000_category_default_duration`, `test/scheduling.e2e-spec.ts`; contract in `03-api-spec.md §10` |
 | 5 | **Fulfilment** (go-ahead 2026-10-11): arrival (5-try lock, one job on site at a time), itemised bill with customer approval of the total shown, before/after photos, completion, payment (idempotent) and receipt, live tracking (`job.location`, socket `location:update`), SOS with a pluggable safety channel, `GET /workers/me/jobs`, ownership-based access (D-8), `workerFreed`, worker back-out with booking clean-up and a re-open that re-notifies workers, per-service duration setting (admin) | **Done and verified by tests** (534 e2e, 221 unit, built-app smoke test through COMPLETED). **CI verified** (§0.5). **Not verified:** idle-machine benchmark. **Not built:** see §3.2 | `src/modules/{fulfilment,safety}/`, `jobs/worker-backout.service.ts`, `test/{phase5-requirements,fulfilment}.e2e-spec.ts`; contract `03-api-spec.md §11` |
-| 5b | **Arrival-code recovery** (approved 2026-10-11): customer-issued new code, 3 per assignment, 60 s cooldown, audit trail, `job.arrival_code_reset` | **Built, tested locally; migration applied to dev; smoke-tested in the built app.** Not yet through CI | `modules/fulfilment/arrival-code-reset.service.ts`, migration `20261011150000_arrival_code_reset`, `test/arrival-code-reset.e2e-spec.ts`; contract `03-api-spec.md §11.9` |
-| 6 | **Reviews, activity extras, earnings, savings** (go-ahead 2026-10-11) | **Done and verified by tests locally** (579 e2e, 236 unit, build, lint, types, audit, no schema drift). **Not yet through CI.** No migration needed | `src/modules/{reviews,earnings}/`, `test/phase6.e2e-spec.ts`; contract `03-api-spec.md §12` |
-| 7 | Hardening and release | Not started | see §7 |
+| 5b | **Arrival-code recovery** (approved 2026-10-11): customer-issued new code, 3 per assignment, 60 s cooldown, audit trail, `job.arrival_code_reset` | **Built, tested locally; migration applied to dev; smoke-tested in the built app.** Merged in PR #2; CI passed (§0.5) | `modules/fulfilment/arrival-code-reset.service.ts`, migration `20261011150000_arrival_code_reset`, `test/arrival-code-reset.e2e-spec.ts`; contract `03-api-spec.md §11.9` |
+| 6 | **Reviews, activity extras, earnings, savings** (go-ahead 2026-10-11) | **Done and verified by tests locally** (579 e2e, 236 unit, build, lint, types, audit, no schema drift). **Merged in PR #2; CI passed (§0.5).** No migration needed | `src/modules/{reviews,earnings}/`, `test/phase6.e2e-spec.ts`; contract `03-api-spec.md §12` |
+| 7 | Hardening and release | **Milestone A committed and pushed (8 commits); PR #3 open; CI run 38127145264 passed on the seventh commit `89a3964`, the eighth commit's run is read separately; K-37 fixed** (coverage gates, D-8, masked logging, IDOR matrix, `ProfileGuard`, K-5, K-36, K-37): see §0.9. Milestones B onward not started | see §7 |
 | 8 | Optional (MSG91, Redis, push, PDF, admin UI) | Not started | |
 
 Roadmap estimate for the remaining work (`docs/07-roadmap.md`): Phase 5 7–8 d, Phase 6 3–4 d (done), Phase 7 4–5 d.
@@ -188,8 +235,8 @@ See `docs/01-requirements.md` FR-SCHEDULING and `03-api-spec.md §10`: booking w
 |---|---|
 | `npm run lint` (oxlint) | 0 warnings, 0 errors |
 | `npm run typecheck` | clean |
-| `npm test` (unit) | **236 / 236** pass, 28 files (was 221 / 25) |
-| `npm run test:e2e` (real PostgreSQL `KaamConnect_test`, real WebSockets) | **579 / 579** pass, 21 files (was 534 / 19: +16 in `arrival-code-reset.e2e-spec.ts`, +6 in `db-constraints.e2e-spec.ts`, +23 in `phase6.e2e-spec.ts`) |
+| `npm test` (unit) | **299 / 299** pass, 33 files (Milestone A added 63) |
+| `npm run test:e2e` (real PostgreSQL `KaamConnect_test`, real WebSockets) | **718 / 718** pass, 26 files (Milestone A added 139) |
 | `npm run test:perf` (5,000 workers, 50,000 jobs) | 7 / 7 pass **functionally**. The idle-machine comparison is still **pending** (§3.4) |
 | `npm run build` | clean |
 | `npm audit --omit=dev` | 0 vulnerabilities |
@@ -249,12 +296,14 @@ No endpoint is anywhere near its budget. The original baseline was a single run,
 | ~~K-2~~ | **Resolved 2026-10-11:** the CI workflow ran on GitHub and succeeded (run 38086756115) | – | – |
 | K-3 | `S3StorageService` has never talked to a real bucket | Production uploads unproven (unit tests prove the signature covers type and size) | Needs an AWS bucket (Q-15, Q-21) |
 | K-4 | Area centroids are null | Matching uses the same-city fallback: a worker with a 3 km radius still gets every job in their city, and `distanceKm` is `null` everywhere. The radius rule is built and tested but dormant | Q-18 |
-| K-5 | Access tokens cannot be revoked for 15 min; the JWT guard does not hit the DB | A disabled user keeps access until next refresh | Accepted for v1 |
+| ~~K-5~~ | **Fixed (Phase 7, Milestone A, `c4ba0fb`, pushed; inside the code CI run 38127145264 passed):** `ProfileGuard` refuses a disabled account on every protected route with `403 ACCOUNT_DISABLED`, using one lookup per request (it was confirmed that a disabled user with an unexpired token could create jobs). `GET /me` now says 403 instead of 401. The one consequence, K-37, is fixed in the eighth commit | – | – |
 | K-6 | Two parallel `/auth/refresh` calls with the same token end the login | A naive mobile client logs users out | Frontend must single-flight refresh |
-| K-7 | `ProfileGuard` queries the DB on every guarded call | Small latency cost | Revisit in Phase 7 |
+| ~~K-7~~ | **Reviewed 2026-10-11:** `ProfileGuard` does one primary-key lookup per guarded request, reading only the key or the status; the freshness is deliberate (D-8 takes effect on the next call). 20 unit tests. No change | – | – |
 | ~~K-8~~ | `PUT /workers/me/location` is still accepted from any verified worker (they send it for lead matching) and now also from a worker in review **only while a job is assigned to them**; the job's live position is rebroadcast as `job.location`. **Resolved in the sense that matters:** pings are tied to a job for tracking | – | – |
 | K-9 | Dev OTP is printed to the log (console sender); `OTP_DEV_BYPASS=true` makes it `123456` | Dev only; both refused in production | None |
-| K-10 | No request/PII-masking logging interceptor | Minimal request logs | Phase 7 |
+| ~~K-10~~ | **Resolved (Milestone A, `cab5e60`, pushed):** request logging with masking, and a masking logger for every log line | – | – |
+| ~~K-36~~ | **Fixed (Phase 7, Milestone A, `ac7c22a`, pushed; inside the code CI run 38127145264 passed):** pending quotes of a worker who is not VERIFIED are hidden from the list and from every quote count and cannot be accepted (`409 OFFER_UNAVAILABLE`); an accepted quote is never affected | – | – |
+| ~~K-37~~ | **Fixed (Phase 7, Milestone A, eighth commit, pushed to PR #3; its CI run is read separately).** `POST /auth/logout` had been refused for a disabled account (a consequence of K-5), so the session's refresh tokens stayed unrevoked and still worked after re-enabling. Now `@AllowDisabledAccount()` lets that one route through: 204, the caller's refresh family is revoked, and the old token answers 401 after re-enabling. Reproduction before the fix, the design and the tests: §0.9, `05-security-testing.md §12.8` | – | – |
 | K-11 | e2e suite empties `KaamConnect_test` on every run and needs a local PostgreSQL | CI needs a DB service | By design; the harness refuses any non-`*_test` DB |
 | K-12 | Cosmetic: `customers.service.ts:191` has a stray `export type { UpdateAddressDto }` and a matching unused import | None | Left untouched |
 | K-13 | PgBouncer in transaction mode would drop the UTC session pin unless `options` startup parameters are allowed | Wrong stored timestamps | Documented in `02-database.md §8` |
@@ -286,16 +335,16 @@ No endpoint is anywhere near its budget. The original baseline was a single run,
 |---|---|---|
 | `prisma/seed-demo.ts` / `npm run db:seed:demo` | `06-migrations-seeds.md`, roadmap Phase 3 | Not delivered; schedule with Phase 5 or 7 |
 | OpenAPI export and contract check in CI (`@nestjs/swagger` not installed) | `04`, `05`, roadmap Phase 7 | 7 |
-| Coverage gates | `05-security-testing.md` | 7 |
+| ~~Coverage gates~~ | `05-security-testing.md` | **built and pushed (Milestone A); CI run 38127145264 passed** |
 | k6 / autocannon load test beyond the in-repo benchmark | roadmap Phase 7 | 7 |
 | Dockerfile / Procfile, staging deployment | roadmap Phase 7 | 7 (needs hosting decision) |
-| `LoggingInterceptor` with phone masking | `04-architecture.md` | 7 |
+| ~~`LoggingInterceptor` with phone masking~~ | `04-architecture.md` | **built and pushed (Milestone A); CI run 38127145264 passed** as middleware plus a masking logger, so that guard refusals are logged too |
 | `Idempotency-Key` | `03-api-spec.md §1` | See K-17 |
 | `CacheService` and Redis seams | `04-architecture.md §7` | 8 |
 | MSG91 sender, WhatsApp OTP | D-2 | 8 (blocked on DLT) |
 | `DELETE /me` | Q-17 | 7 |
 | Aadhaar image retention job (`AADHAAR_RETENTION_DAYS`, default 7; S3 lifecycle cap; probable `reviewed_at` migration, ask first) | D-9 (was Q-20) | 7 |
-| Name or photo change on a VERIFIED worker re-opens review (normalised name compare, different `photoKey`, both modes) | D-8 (was Q-19) | small change; do before or with Phase 5 |
+| ~~Name or photo change on a VERIFIED worker re-opens review~~ (normalised name compare, different `photoKey`, both modes) | D-8 (was Q-19) | **built and pushed (Milestone A); CI run 38127145264 passed** |
 
 ### 4.4 Documentation corrections made while writing this report
 - `docs/01-requirements.md` D-7 now states the real git state. `docs/07-roadmap.md` Phase 4 heading now says 8–11 d.
@@ -359,10 +408,10 @@ Answered by you: Q-1, 2, 3, 7, 9, 13 and the real-time/Redis question (D-1…D-7
 | Q-15 | Hosting / storage provider | AWS S3 + RDS | **Phase 7** and the first real S3 test |
 | Q-16 | Show worker phone to logged-in customers | yes (**implemented** on cards, offers, assigned view) | nothing |
 | Q-17 | Account deletion | yes, Phase 7 | Phase 7 |
-| ~~Q-19~~ | **Answered 2026-10-10 → D-8:** a normalised name change on a VERIFIED worker returns the profile to PENDING (both modes). **Not built yet** | n/a | Shapes Phase 5: job-acting routes must gate on job ownership, not VERIFIED |
+| ~~Q-19~~ | **Answered 2026-10-10 → D-8:** a normalised name change on a VERIFIED worker returns the profile to PENDING (both modes). **Built and pushed (Phase 7, Milestone A); CI run 38127145264 passed** | n/a | Shapes Phase 5: job-acting routes must gate on job ownership, not VERIFIED |
 | ~~Q-20~~ | **Answered 2026-10-10 → D-9:** delete Aadhaar images 7 days after the decision (configurable). **Not built yet**, so images are still kept indefinitely | n/a | Phase 7; legal sign-off on collecting Aadhaar images still open |
 | ~~Q-21~~ | **Answered 2026-10-10 → D-10:** `ap-south-1` (Mumbai) | n/a | First real S3 test (K-3) / Phase 7 |
-| ~~Q-22~~ | **Answered 2026-10-10 → yes**, folded into D-8: a different `photoKey` on a VERIFIED worker also returns the profile to PENDING (removing the photo does not). **Not built yet** | n/a | Same small change as D-8 |
+| ~~Q-22~~ | **Answered 2026-10-10 → yes**, folded into D-8: a different `photoKey` on a VERIFIED worker also returns the profile to PENDING (removing the photo does not). **Built and pushed (Phase 7, Milestone A); CI run 38127145264 passed** | n/a | Same small change as D-8 |
 
 Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under review" copy, socket client and token refresh, non-empty address line, real upload flow, and (new) the exact values/screens the app must send and listen to for jobs, quotes and live updates.
 
@@ -394,19 +443,29 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 
 ## 8. Exact next task and recommended next steps
 
-**Phase 6 is built and tested locally** (2026-10-11, after your explicit go-ahead). **Its CI result is on the new pull request**; this report does not claim it passes.
+**Where things stand (2026-10-11).** `feature/phase-7-milestone-a` holds eight commits (the first seven are listed in §0.9; the eighth is the K-37 fix) and is open as **PR #3** into `main`. GitHub Actions run 38127145264 **succeeded on the seventh commit `89a3964`** (18 steps, including the coverage thresholds). The eighth commit has its own run, which is read separately; nothing here claims it passed. `main` is `7e94da2`, unchanged by me.
+
+**Next action, in this order:**
+1. **I read the GitHub Actions run for the eighth commit** on PR #3 through the public API and report each step, with the logs of any failure. Until a run on that exact commit says `success`, it is not called passed.
+2. **You decide whether to merge PR #3** (I never merge). Milestone B starts only on your explicit go-ahead.
+
+**Standing limits (until you lift them):** do not create another PR or merge PR #3; do not modify `main`; do not start Milestone B (D-9 Aadhaar retention, `DELETE /me`, load smoke and `EXPLAIN` review, OpenAPI export, Dockerfile and staging, runbook); no force push; no destructive database operation; SOS delivery, real S3, MSG91, the 13 area coordinates, per-service durations and the idle-machine benchmark stay pending; the 90-minute default stays.
+
+**Older items, still open:**
+
+**Phase 6 is built and tested** (2026-10-11, after your explicit go-ahead). **CI passed on its pull request and on `main` after the merge** (§0.5).
 
 **Open, in the order I suggest:**
-1. ~~Docs commit (the CI-result edit only)~~ **Done:** commit `6665ea0` was pushed to `feature/backend-phases-0-5` after PR #1 had already been merged, so it reaches `main` only through the new pull request.
+1. ~~Docs commit (the CI-result edit only)~~ **Done:** commit `6665ea0` was pushed to `feature/backend-phases-0-5` after PR #1 had already been merged, and reached `main` through PR #2.
 2. ~~Review and apply the migration to dev~~ **Done 2026-10-11** (backup, `migrate deploy`, status, drift, extended smoke test; §0.2, §0.3).
-3. ~~Commit and push the new work~~ **Approved and done as five commits on `feature/phase-6-and-arrival-recovery`; the new PR is #2 into `main` (open, not merged).** A sixth commit followed the code review (documentation corrections, a schema comment and 11 more tests). **Next: read that PR's CI run, and do not merge it without your approval.**
+3. ~~Commit and push the new work~~ **Approved and done as five commits on `feature/phase-6-and-arrival-recovery`; PR #2 into `main` was merged by you (2026-10-11 07:07:51 UTC).** A sixth commit followed the code review (documentation corrections, a schema comment and 11 more tests). **CI was read from GitHub: passed (§0.5).**
 4. **Benchmark on an idle machine** three times against the baseline in §0.6.
 5. **SOS:** name a receiver and a 24/7 monitoring person, then approve the delivery design; nothing is enabled until then.
 6. **Supply per-service minutes** (90 stays the default) and **verified area coordinates** (13 pending; none invented).
 
-**Approved earlier but still not built:** D-8 (name/photo change re-opens review) and D-9 (Aadhaar deletion, probably one small migration, which I would ask about first).
+**Approved earlier but still not built:** D-9 (Aadhaar deletion, probably one small migration, which I would ask about first). D-8 was built in Milestone A.
 
-**Phase 7 carry-overs:** SOS retry/acknowledge, worker payment confirmation if disputes appear, IDOR matrix extension (an access matrix for the 11 new routes already exists in `fulfilment.e2e-spec.ts`), a nightly run of the contention tests, the first real S3 test, MSG91, the legal items.
+**Phase 7 carry-overs:** SOS retry/acknowledge, worker payment confirmation if disputes appear, a nightly run of the contention tests, the first real S3 test, MSG91, the legal items. (The IDOR matrix extension was done in Milestone A.)
 
 **Not part of the next step:** MSG91, Redis, and any change to the mobile app.
 
@@ -418,7 +477,7 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 |---|---|---|
 | Source layout and routes | `find src`, grep of route decorators in `*.controller.ts` | 64 handlers (was 60 after Phase 5, 45 after Phase 4); `jobs`, `offers`, `matching`, `realtime` modules exist; no bill / payment / tracking code |
 | Quality gates | `npm run lint`, `typecheck`, `test`, `test:e2e`, `test:perf`, `build`, `npm audit` | see §3.3 |
-| Test counts | `npm test`, `npm run test:e2e` | unit 236 (28 files), e2e 579 (21 files); before Phase 6: 221 + 534; before Phase 5: 198 + 473 |
+| Test counts | `npm test`, `npm run test:e2e` | unit 299 (33 files), e2e 718 (26 files); before Phase 6: 221 + 534; before Phase 5: 198 + 473 |
 | Migration and drift | `prisma migrate status`, `prisma migrate diff --exit-code` | up to date, no drift, no new migration |
 | Dev data | row counts | 0 users, 0 jobs, 0 offers; 8/3/13 reference rows; 0 areas with coordinates |
 | End-to-end on the built app | `bash scripts/smoke.sh` against the dev DB, then cleanup | passed; DB back to 0 users / 0 jobs |
@@ -445,4 +504,7 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 | Arrival-code recovery and Phase 6 (2026-10-11) | `npm run typecheck`, `lint`, `prettier --check`, `npm test`, `npm run test:e2e` (full, re-run after the branch was created), `npm run build`, `npm audit --omit=dev`, `prisma migrate diff` against the migrated test database | all clean: 236 unit, 579 e2e (after the review follow-up), 0 vulnerabilities, no drift on test |
 | Dev migration and smoke test (2026-10-11) | read-only check of the connection (host, database name, `NODE_ENV`, 3 migrations, 0 users and 0 jobs); `pg_dump` custom format, then `pg_restore --list`; `npm run db:migrate`; `migrate status`, `migrate diff`, catalog queries; `npm run build`; `bash scripts/smoke.sh`; row counts of every table before and after; one transaction removing only the smoke data, committed only if counts equalled the snapshot | backup 63,124 bytes and readable; migration applied cleanly; up to date, no drift; smoke test passed; cleanup matched the snapshot (reference data only) |
 | Mutation checks (2026-10-11) | broke the code on purpose and ran the matching tests: reset cap, cooldown, ownership; review ownership, rating totals, IST offset, COMPLETED filters (earnings, savings) | all caught; two survived at first because the fixtures never exercised the filter, fixtures were strengthened, then caught; every file restored Follow-up: 4 e2e mutations, 2 unit mutations and 3 test-database constraint mutations, all caught and all restored. |
-| Not verified (2026-10-11) | CI on the new work (including the extended smoke script), performance on an idle machine, real SOS delivery, real S3, `btree_gist` as a non-superuser on RDS | pending, see §0 |
+| Milestone A push (2026-10-11) | seven commits created with explicit file lists; each verified in an isolated worktree; full `npm run test:cov` on the final commit; `git push -u origin` of a brand-new branch (no force); then GitHub API calls for the branch, the comparison with `main`, pull requests and workflow runs | tip `89a3964` on the remote; 7 ahead / 2 behind (merge commits, same tree); **0 PRs, 0 workflow runs at that moment** (you opened PR #3 minutes later and run 38127145264 succeeded, as read through the API at the start of the K-37 session) |
+| K-37 fix (2026-10-11, eighth commit) | the new guard and e2e tests first (one wrong expectation of mine corrected: `REFRESH_REUSED`, not `REFRESH_INVALID`); then 4 mutations, each made and restored (guard ignoring the marker; decorator removed from logout; marker honoured on every route; marker honoured even with a profile or admin requirement), restore checked byte for byte; then `npm run test:cov`, `typecheck`, `oxlint --deny-warnings`, `prettier --check`, `npm run build`, `npm audit --omit=dev` | all four mutations caught; all gates green: 305 unit, 724 e2e |
+| K-37 experiment (2026-10-11, not committed) | a temporary e2e spec: logout for an active user and for a disabled user, re-enable, refresh; refresh while disabled; `GET /me` for a disabled user | results in §0.9; the temporary file was deleted |
+| Not verified (2026-10-11) | **CI on the eighth commit (K-37; read separately)**, the idle-machine benchmark, real SOS delivery, real S3, `btree_gist` as a non-superuser on RDS | pending, see §0 |

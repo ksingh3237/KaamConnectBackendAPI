@@ -1,6 +1,8 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ALLOW_DISABLED_ACCOUNT_KEY } from '../decorators/allow-disabled-account.decorator.js';
 import type { AuthenticatedRequest } from '../decorators/current-user.decorator.js';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
 import {
   ADMIN_ONLY_KEY,
   REQUIRE_PROFILE_KEY,
@@ -11,9 +13,17 @@ import { VerificationStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 
 /**
- * Runs after the JWT guard. Enforces @RequireProfile(...) and @AdminOnly() from the database, so a
- * profile created or an admin flag removed takes effect immediately (not after the token expires).
- * Ownership of individual records is still checked inside each service.
+ * Runs after the JWT guard, on every authenticated HTTP request, and decides from the DATABASE, so a change
+ * takes effect on the very next call and not when the access token expires:
+ *  - the account must still be active (`ACCOUNT_DISABLED`, 403). The JWT guard only checks the signature and
+ *    expiry, so without this a user disabled mid-session could keep working for up to 15 minutes. The one
+ *    exception is a route marked @AllowDisabledAccount() (logout, K-37);
+ *  - @AdminOnly(): the user must be an active admin;
+ *  - @RequireProfile(...): the customer or worker profile must exist, and for `verified` routes the worker
+ *    must be VERIFIED.
+ *
+ * It is ONE primary-key lookup, made from the user's side with the related profile selected only when the
+ * route asks for it. Ownership of a particular record is still checked inside each service.
  */
 @Injectable()
 export class ProfileGuard implements CanActivate {
@@ -25,6 +35,16 @@ export class ProfileGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() !== 'http') return true;
     const targets = [context.getHandler(), context.getClass()];
+
+    // Public routes are not about a signed-in user (login must work for an account that is being re-checked).
+    if (
+      this.reflector.getAllAndOverride<boolean | undefined>(
+        IS_PUBLIC_KEY,
+        targets,
+      )
+    )
+      return true;
+
     const requirement = this.reflector.getAllAndOverride<
       ProfileRequirement | undefined
     >(REQUIRE_PROFILE_KEY, targets);
@@ -32,42 +52,68 @@ export class ProfileGuard implements CanActivate {
       ADMIN_ONLY_KEY,
       targets,
     );
-    if (!requirement && !adminOnly) return true;
+
+    // K-37: only for a route that needs nothing but a signed-in user (logout); with a profile or admin
+    // requirement the marker is ignored, so a disabled account stays refused there.
+    const allowDisabled =
+      !requirement &&
+      !adminOnly &&
+      this.reflector.getAllAndOverride<boolean | undefined>(
+        ALLOW_DISABLED_ACCOUNT_KEY,
+        targets,
+      ) === true;
 
     const userId = context.switchToHttp().getRequest<AuthenticatedRequest>()
       .user?.id;
-    if (!userId)
+    if (!userId) {
+      // Nothing to judge. A route that asks for a profile or admin rights needs someone signed in.
+      if (requirement || adminOnly)
+        throw new AppException(
+          'UNAUTHENTICATED',
+          401,
+          'Authentication required',
+        );
+      return true;
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        isActive: true,
+        ...(adminOnly ? { isAdmin: true } : {}),
+        ...(requirement?.role === 'customer'
+          ? { customer: { select: { userId: true } } }
+          : {}),
+        ...(requirement?.role === 'worker'
+          ? { worker: { select: { verificationStatus: true } } }
+          : {}),
+      },
+    });
+    // A valid token for a user that no longer exists.
+    if (!user)
       throw new AppException('UNAUTHENTICATED', 401, 'Authentication required');
 
     if (adminOnly) {
-      const admin = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { isAdmin: true, isActive: true },
-      });
-      // 404, not 403: do not advertise that an admin API exists.
-      if (!admin?.isAdmin || !admin.isActive)
+      // 404, not 403: do not advertise that an admin API exists, not even to a disabled admin.
+      if (!user.isActive || !user.isAdmin)
         throw new AppException('NOT_FOUND', 404, 'Not found');
+    } else if (!user.isActive && !allowDisabled) {
+      throw new AppException(
+        'ACCOUNT_DISABLED',
+        403,
+        'Your account has been disabled. Please contact support.',
+      );
     }
 
-    if (requirement?.role === 'customer') {
-      const profile = await this.prisma.customerProfile.findUnique({
-        where: { userId },
-        select: { userId: true },
-      });
-      if (!profile)
-        throw new AppException(
-          'CUSTOMER_PROFILE_REQUIRED',
-          403,
-          'Complete your customer profile first',
-        );
-    }
+    if (requirement?.role === 'customer' && !user.customer)
+      throw new AppException(
+        'CUSTOMER_PROFILE_REQUIRED',
+        403,
+        'Complete your customer profile first',
+      );
 
     if (requirement?.role === 'worker') {
-      const profile = await this.prisma.workerProfile.findUnique({
-        where: { userId },
-        select: { verificationStatus: true },
-      });
-      if (!profile)
+      if (!user.worker)
         throw new AppException(
           'WORKER_PROFILE_REQUIRED',
           403,
@@ -75,7 +121,7 @@ export class ProfileGuard implements CanActivate {
         );
       if (
         requirement.verified &&
-        profile.verificationStatus !== VerificationStatus.VERIFIED
+        user.worker.verificationStatus !== VerificationStatus.VERIFIED
       ) {
         throw new AppException(
           'NOT_VERIFIED',
