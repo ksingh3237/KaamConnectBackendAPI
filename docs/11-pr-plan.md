@@ -5,6 +5,11 @@ Milestone B branch, because a plain push does not start the workflow; the result
 2026-10-11 are built in: the follow-up documents are **folded into PR-1** (there is no separate documents PR), the per-user
 limit waits for PR-1, the D-9 migration waits for its own approvals, and OpenAPI export is deferred.
 
+**Executed (2026-10-11):** PR-1 was merged as pull request **#4** (`2dc462b`) and PR-2 as pull request **#5** (`9f088e2`); CI passed on
+both and on `main` after each (runs 38141501391, 38141801737, 38141767728, 38142092820). PR #4 merged at `d83db84`, **before** the
+documentation fold-in, so those two commits reached `main` later (branch `docs/phase-7-status-and-followups`). **PR-3 (D-9) has not
+been opened.** The plan below is kept as written; read it as history except for section 5, which is still current.
+
 ## 1. Order
 
 | # | Pull request | Head branch -> base | Contains | Waits for |
