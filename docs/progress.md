@@ -2,7 +2,7 @@
 
 **Status as of 2026-10-11 (updated after Phase 5).** Every statement below was checked against the repository on that date (commands are listed in §9). Where something is written but not proven, it says so. Nothing incomplete is marked done.
 
-**One-line summary:** Phases 0–5 are built and green: foundation, database, login, profiles/uploads/verification, the marketplace core, scheduling and availability, and now **fulfilment** (arrival with the customer's code, itemised bill with customer approval, work photos, completion, payment and receipt, live tracking, SOS, the worker's job list, and a worker backing out with a safe re-open). **Not yet verified:** the GitHub CI workflow (never run; one step was added and only its script was tested locally) and the idle-machine performance comparison (still pending by your instruction). Phase 6 (reviews, earnings, savings) has not started. Everything is still **uncommitted** in git.
+**One-line summary:** Phases 0–5 are built and green: foundation, database, login, profiles/uploads/verification, the marketplace core, scheduling and availability, and now **fulfilment** (arrival with the customer's code, itemised bill with customer approval, work photos, completion, payment and receipt, live tracking, SOS, the worker's job list, and a worker backing out with a safe re-open). **CI is verified:** the GitHub Actions run on pull request #1 succeeded on 2026-10-11 (all 17 steps, §0.5). **Not yet verified:** the idle-machine performance comparison (pending by your instruction), real delivery of an SOS alert, and real S3. Phase 6 (reviews, earnings, savings) has not started. The work is committed and pushed on branch `feature/backend-phases-0-5` (PR #1, **not merged**); `main` still holds only the two docs-only commits.
 
 ---
 
@@ -65,10 +65,10 @@ Phase 5 added **no** migration. The pre-migration backup of the dev database is 
 | | Fact (checked today) |
 |---|---|
 | Branch / HEAD | `main` at `8d808e5` ("first commit"); two commits in total, both **docs only** (10 files) |
-| Remote | `origin = https://github.com/ksingh3237/KaamConnectBackendAPI.git`; remote `main` is also `8d808e5`, so **nothing of Phases 0–5 has been pushed** |
-| Uncommitted work | 9 modified tracked files (README + 8 docs), 1 staged deletion (`docs/proposed-schema.prisma`), and 20 untracked top-level entries including `src/`, `test/`, `prisma/`, `scripts/`, `package.json` and **`.github/`**. **I have not committed or pushed anything** |
-| GitHub Actions | The workflow file has never been pushed. The public GitHub API for this repository reports **0 workflow runs**. **No CI run has ever happened, so there is no CI result. CI is NOT verified.** |
-| What was verified locally about the CI file | the YAML parses (15 steps); the new `btree_gist` check step's shell logic exits 0 against local PostgreSQL 18 and exits 1 with its message when the extension is missing. Docker is not installed here, so the container itself was never run |
+| Remote | `origin = https://github.com/ksingh3237/KaamConnectBackendAPI.git`. Branch `feature/backend-phases-0-5` pushed (4 commits on top of `main` at `8d808e5`). `main` is unchanged. **PR #1 is open and not merged** |
+| Commits on the branch | `7c4b8c4` scaffold, tooling and CI workflow; `ce817a7` schema, 3 migrations and seed; `84dc86f` backend phases 0–5 with tests; `fd3f6ce` docs. Working tree clean after the push. The reviewed file set contained no secrets (every value in the git-ignored `.env` was searched for in the committed files: 0 matches); a local path in this report was replaced with a generic description before the commit. Edits made after `fd3f6ce` (this report and the roadmap) are uncommitted until you ask |
+| GitHub Actions | **Verified.** Run [38086756115](https://github.com/ksingh3237/KaamConnectBackendAPI/actions/runs/38086756115), event `pull_request`, head commit `fd3f6ce` (the last commit pushed), status completed, **conclusion success**, about 2 min 37 s. Read from the GitHub API, step by step: checkout, setup-node, `npm ci`, create test database, **btree_gist check**, lint, typecheck, unit tests, **e2e tests against the PostgreSQL 18 service container**, build, production audit, migrations on a fresh database, **drift check**, seed, **smoke test of the built app** — all succeeded. It is the only run so far (total_count 1) |
+| What the run settled | The `btree_gist` assumption (official `postgres:18` image, `POSTGRES_USER` superuser) is confirmed on GitHub. **Still not verified:** `btree_gist` creation by a non-superuser role on RDS, and the workflow on the `main` branch trigger (`push`), which has not run because nothing has been merged |
 
 ### 0.6 Pending verification: the idle-machine benchmark
 
@@ -97,13 +97,13 @@ See §8 for the ordered list. In one line: **there is no technical blocker; Phas
 
 | Phase | Scope | Status | Evidence |
 |---|---|---|---|
-| 0 | Scaffold, config validation, health, CI file | **Done** (CI never run on GitHub, see §4) | `src/main.ts`, `src/config/`, `src/health/`, `.github/workflows/ci.yml` |
+| 0 | Scaffold, config validation, health, CI file | **Done** (CI run succeeded 2026-10-11, §0.5) | `src/main.ts`, `src/config/`, `src/health/`, `.github/workflows/ci.yml` |
 | 1 | Schema (19 tables), baseline migration, reference seed, catalog API | **Done** | `prisma/`, `src/modules/catalog/` |
 | 2 | Phone-OTP login, JWT + rotating refresh tokens, `/me`, global login guard | **Done** (MSG91/WhatsApp deliberately not built) | `src/modules/auth/`, `users/` |
 | 3 | Customer + worker profiles, address book, signed uploads, admin verification, worker GPS ping | **Done** (S3 not exercised on real AWS, see §4) | `src/modules/{customers,workers,media,admin}/` |
 | 4 | Jobs, worker discovery, leads, quotes, direct booking, Socket.IO push | **Done** (see §3 for exactly what; Idempotency-Key and search `q` deferred) | `src/modules/{jobs,offers,matching,realtime}/`, `workers/discovery/` |
 | 4b | **Scheduling and availability** (requested 2026-10-10, decisions D-11 to D-14 approved 2026-10-11): `scheduledFor`, booking windows, overlap + travel-gap checks, one in progress + many future bookings, lead accept/decline, `worker_leads` duplicate guard, future-work radius (opt-in), location catch-up, worker calendar, per-service default job length | **Done and applied** to the test and the dev database. **Not covered:** the Phase 5 endpoints that start and finish work, and a worker backing out (K-22) | `src/modules/scheduling/`, `offers/lead-catch-up.service.ts`, migrations `20261010180000_scheduling_and_availability` and `20261011090000_category_default_duration`, `test/scheduling.e2e-spec.ts`; contract in `03-api-spec.md §10` |
-| 5 | **Fulfilment** (go-ahead 2026-10-11): arrival (5-try lock, one job on site at a time), itemised bill with customer approval of the total shown, before/after photos, completion, payment (idempotent) and receipt, live tracking (`job.location`, socket `location:update`), SOS with a pluggable safety channel, `GET /workers/me/jobs`, ownership-based access (D-8), `workerFreed`, worker back-out with booking clean-up and a re-open that re-notifies workers, per-service duration setting (admin) | **Done and verified by tests** (534 e2e, 221 unit, built-app smoke test through COMPLETED). **Not verified:** CI on GitHub, idle-machine benchmark. **Not built:** see §3.2 | `src/modules/{fulfilment,safety}/`, `jobs/worker-backout.service.ts`, `test/{phase5-requirements,fulfilment}.e2e-spec.ts`; contract `03-api-spec.md §11` |
+| 5 | **Fulfilment** (go-ahead 2026-10-11): arrival (5-try lock, one job on site at a time), itemised bill with customer approval of the total shown, before/after photos, completion, payment (idempotent) and receipt, live tracking (`job.location`, socket `location:update`), SOS with a pluggable safety channel, `GET /workers/me/jobs`, ownership-based access (D-8), `workerFreed`, worker back-out with booking clean-up and a re-open that re-notifies workers, per-service duration setting (admin) | **Done and verified by tests** (534 e2e, 221 unit, built-app smoke test through COMPLETED). **CI verified** (§0.5). **Not verified:** idle-machine benchmark. **Not built:** see §3.2 | `src/modules/{fulfilment,safety}/`, `jobs/worker-backout.service.ts`, `test/{phase5-requirements,fulfilment}.e2e-spec.ts`; contract `03-api-spec.md §11` |
 | 6 | Reviews, activity extras, earnings, savings | Not started | |
 | 7 | Hardening and release | Not started | see §7 |
 | 8 | Optional (MSG91, Redis, push, PDF, admin UI) | Not started | |
@@ -222,8 +222,8 @@ No endpoint is anywhere near its budget. The original baseline was a single run,
 
 ### 3.6 Repository and CI
 - Branch `main`; two commits (**docs and README only**). Remote `origin` = `github.com/ksingh3237/KaamConnectBackendAPI` configured.
-- **Everything from Phases 0–5 is uncommitted** (`src/`, `test/`, `prisma/`, `scripts/`, `package.json`, `.github/`, doc updates). `docs/proposed-schema.prisma` is staged for deletion (duplicate of `prisma/schema.prisma`).
-- **CI (`.github/workflows/ci.yml`) has never run on GitHub, so it is not verified.** Changes made: a step that checks PostgreSQL can provide `btree_gist` (the official `postgres:18` image ships it and `POSTGRES_USER` is a superuser, which is my understanding, not something I could run: there is no Docker here); the smoke test now reaches COMPLETED. What I did verify: the YAML parses (15 steps), and the shell of the new step behaves correctly against local PostgreSQL 18, both when the extension exists (exit 0) and when it does not (exit 1 with the error message).
+- **Everything from Phases 0–5 is committed and pushed** on `feature/backend-phases-0-5` (four commits, PR #1 open, not merged). `docs/proposed-schema.prisma` was deleted in the docs commit (duplicate of `prisma/schema.prisma`).
+- **CI (`.github/workflows/ci.yml`) ran on GitHub and passed** (run 38086756115 on PR #1, commit `fd3f6ce`, all steps successful, §0.5). It includes the `btree_gist` availability step, which also passed. It has not yet run on a push to `main`, because nothing has been merged.
 - `.env` and `.local-storage/` are git-ignored. Your `.env` has `WORKER_VERIFICATION_MODE=auto` (so the smoke script works locally); it lacks the newer optional keys (defaults apply).
 
 ---
@@ -236,8 +236,8 @@ No endpoint is anywhere near its budget. The original baseline was a single run,
 ### 4.2 Known limitations and risks (verified)
 | # | Item | Impact | Action |
 |---|---|---|---|
-| K-1 | Phases 0–4 are uncommitted and unpushed | A disk problem loses all the work | Your call when to commit/push; I do not commit unless asked |
-| K-2 | CI workflow has never run on GitHub. It changed again in Phase 4 (adds `WORKER_VERIFICATION_MODE=auto`, a heavier smoke script that needs the `socket.io-client` dev dependency) | May fail for environment reasons | Push to a branch and read the first run |
+| ~~K-1~~ | **Resolved 2026-10-11:** work committed and pushed to `feature/backend-phases-0-5` (PR #1). Not merged into `main` | – | – |
+| ~~K-2~~ | **Resolved 2026-10-11:** the CI workflow ran on GitHub and succeeded (run 38086756115) | – | – |
 | K-3 | `S3StorageService` has never talked to a real bucket | Production uploads unproven (unit tests prove the signature covers type and size) | Needs an AWS bucket (Q-15, Q-21) |
 | K-4 | Area centroids are null | Matching uses the same-city fallback: a worker with a 3 km radius still gets every job in their city, and `distanceKm` is `null` everywhere. The radius rule is built and tested but dormant | Q-18 |
 | K-5 | Access tokens cannot be revoked for 15 min; the JWT guard does not hit the DB | A disabled user keeps access until next refresh | Accepted for v1 |
@@ -259,7 +259,7 @@ No endpoint is anywhere near its budget. The original baseline was a single run,
 | **K-28** | SOS: the alert is stored and sent to one webhook (5 s timeout, no retry). No acknowledge/resolve endpoint and no `sos.acknowledged` event. **Production now refuses to boot without `SOS_WEBHOOK_URL`** (https), like the other safety guards | An unreachable desk is only visible in the logs; alerts stay `OPEN` forever | Phase 7: retry/queue + admin acknowledge; set `SOS_WEBHOOK_URL` before launch |
 | **K-29** | Payment is the customer's own statement; the platform neither moves nor verifies money (BR-2). The worker-confirm path (`POST /jobs/:id/payment/confirm`) is not built | A dishonest "Paid" is possible | R-7; add the confirm path if disputes appear |
 | **K-30** | `GET /workers/me/jobs` lists unanswered quotes (`pendingQuotes`) outside the paging, capped at 50 | A worker with more than 50 waiting quotes sees the 50 newest | Fine for launch |
-| **K-31** | The CI workflow is unverified (see §3.6) and the `btree_gist` assumption is untested on GitHub | The first run could fail for an environment reason | Push to a branch and read the first run; do not treat CI as passing until then |
+| ~~K-31~~ | **Resolved 2026-10-11:** the CI run passed, including the `btree_gist` step | – | – |
 | **K-23** | Straight-line travel times; and no service has its own job length yet (D-14 support is built but the numbers are empty) | A long job (AC installation) can be booked over by a short one; short jobs block more than needed | Supply minutes per service (`defaultDurationMin` in `prisma/data/service-categories.ts`, then re-run the seed), A-18 |
 | **K-24** | Location catch-up remembers where it last matched each worker in memory, per instance; at most one look per worker per minute | After a job ends, new nearby leads can take up to a minute to arrive; with several instances a worker may be looked at more often (harmless: the delivery guard prevents duplicates) | Fine for launch; move the mark into the Redis seam (D-6) if needed |
 | ~~K-25~~ | Quote-time availability is a hard check. **Approved as D-12 (2026-10-11).** | – | – |
@@ -387,7 +387,7 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 
 **Strongly recommended first, in this order:**
 1. **Commit and push.** Everything since the first commit exists only locally (§0.5). Say the word and I will commit in sensible pieces and push; I have not, because nothing here may be committed without you asking. The workflow file travels with it.
-2. **Read the first GitHub Actions run.** Until it runs and passes, CI is unverified (K-31). If the `btree_gist` check step fails, its message says what to change. Do not treat CI as passing before then.
+2. **Read the first GitHub Actions run. Done 2026-10-11:** it passed (§0.5, run 38086756115).
 3. **Re-run the benchmark on an idle machine** three times and compare with the baseline in §0.6.
 4. **Decide the two open questions** in §0.4 (arrival-code recovery; SOS webhook and who watches it).
 5. **Supply per-service minutes** and **verified area coordinates** (§0.7).
@@ -421,9 +421,10 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 | Dev database migration (2026-10-11) | read-only check of the connection (host localhost, database `KaamConnect`, `NODE_ENV=development`, 0 users / 0 jobs), `pg_dump` + `pg_restore --list`, scan of the SQL for DROP/DELETE/TRUNCATE (only `ON DELETE CASCADE` on the new table), `npm run db:migrate`, then `migrate status`, `migrate diff` and catalog queries | applied cleanly; up to date, no drift, extension and constraints present |
 | Smoke test on the migrated dev DB | `npm run build`, `bash scripts/smoke.sh`, then removal of its users and job | passed; dev back to 0 users / 0 jobs |
 | Performance | `npm run test:perf` ×3 on the quieter machine, plus temporary profiling tests (removed) | §3.4 |
-| Not verified | CI on GitHub (never run), performance on a truly idle machine, `btree_gist` creation by a non-superuser role on RDS | see K-2, §3.4, `02-database.md §5` |
+| Not verified | Performance on a truly idle machine, `btree_gist` creation by a non-superuser role on RDS (CI is now verified, see the next row) | see §3.4, `02-database.md §5` |
 | Phase 5 first run | wrote the real suite, ran it | 25 of 27 passed; the 2 failures were mistakes in my test set-up (a worker cannot take two overlapping immediate jobs, which is the scheduling rule working), fixed; then 27 + 34 pass |
 | Phase 5 CI step | parsed the workflow with js-yaml; ran the step's shell against local PostgreSQL 18 with the extension present and with it renamed to a missing one | exit 0 and exit 1 with the intended message. **GitHub itself has not run it** |
-| Not verified | CI on GitHub, performance on an idle machine, `btree_gist` creation by a non-superuser role on RDS, `SOS_WEBHOOK_URL` against a real receiver (the webhook client is unit-tested against a mocked `fetch`) | §3.4, §3.6, K-28, K-31 |
+| CI run (2026-10-11) | GitHub API: `/actions/runs` and `/actions/runs/38086756115/jobs` after PR #1 was opened | 1 run, conclusion success, head `fd3f6ce`, 17/17 steps successful (§0.5) |
+| Not verified | Performance on an idle machine, `btree_gist` creation by a non-superuser role on RDS, `SOS_WEBHOOK_URL` against a real receiver (the webhook client is unit-tested against a mocked `fetch`) | §3.4, K-28 |
 | Final re-verification (2026-10-11, end of session) | `git status/log/ls-remote`; public GitHub Actions API; `prisma migrate status` + `migrate diff` on dev and test; read-only SQL on both databases; grep of controllers and tests; `tsc`, `oxlint`, Prettier, `npm test`, `npm run test:e2e`, `npm run build`, `npm audit --omit=dev` | §0: 221 unit and 534 e2e pass with none skipped; no drift; 0 workflow runs; remote = docs-only commit |
 | Corrected | I had written "2026-10-12" for the Phase 5 work; the system date is 2026-10-11, so every such date in the docs was corrected | – |

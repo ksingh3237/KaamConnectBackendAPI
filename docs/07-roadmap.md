@@ -61,7 +61,7 @@ Realistic range assumes answers to the open questions arrive in week 1. Add ~20 
 5. **Re-opened leads are re-sent**: the once-only guard is reset for everyone except workers who declined and the one who backed out, so `lead.new` goes out again exactly once per re-open; the customer gets `job.reopened`. **Built**, with a regression test that fails if the reset is removed (checked by deliberately removing it).
 6. **One job on site at a time**: friendly `409 WORKER_BUSY` plus the database index, both tested, including two simultaneous arrivals. **Built.**
 
-## Phase 5 — Fulfilment (6–7 d) — **DONE 2026-10-11, with two checks outstanding**
+## Phase 5 — Fulfilment (6–7 d) — **DONE 2026-10-11; CI verified, idle-machine benchmark still pending**
 **Files:** `modules/fulfilment` (arrival, bill, completion, payment and receipt, tracking, worker's job list), `modules/safety` (SOS), `jobs/worker-backout.service.ts`, `jobs/open-until.ts`, the `location:update` handler in `realtime/realtime.gateway.ts`. No migration.
 **Endpoints:** `GET /jobs/:id/tracking`, `POST /jobs/:id/arrival`, `PUT /jobs/:id/bill-items`, `POST /jobs/:id/work-photos`, `POST /jobs/:id/bill/approve`, `POST /jobs/:id/complete-work`, `GET /jobs/:id/bill`, `POST /jobs/:id/payment`, `GET /jobs/:id/receipt`, `POST /jobs/:id/sos`, `GET /workers/me/jobs`, `PATCH /admin/service-categories/:id/duration` (decision D-14). Contract: `03-api-spec.md §11`.
 **Acceptance, and how each was checked:**
@@ -74,7 +74,7 @@ Realistic range assumes answers to the open questions arrive in week 1. Add ~20 
 | Stale GPS (> 2 min) flagged in tracking | **Met**; a fix older than 30 min also loses its distance |
 | SOS persists and notifies the configured channel | **Met against a recording notifier and a mocked webhook client**; **not** tried against a real receiver |
 | Distances only from real coordinates | **Met**: `null` plus `distanceBasis` when the job or area has none (K-26) |
-**Not verified:** GitHub CI (never run; a `btree_gist` check step was added, only its script was tested locally) and the idle-machine benchmark (pending by instruction).
+**Verified on GitHub (2026-10-11):** the CI workflow ran on PR #1 (branch `feature/backend-phases-0-5`) and succeeded, including the `btree_gist` step and the built-app smoke test. **Not verified:** the idle-machine benchmark (pending by instruction), real SOS delivery to a receiver, and real S3.
 **Not built (documented):** worker payment confirmation, admin SOS acknowledge and `sos.acknowledged`, PDF receipts, retry for the SOS webhook. See `progress.md` §3.2 and K-27 to K-31.
 **Also built:** `job.location`, `bill.updated`, `job.reopened` events and the `location:update` socket event (throttled to one stored fix per 3 s). **Risks that remain:** ETA quality without a routing provider (straight line x speed); payment honesty (customer self-reports).
 
