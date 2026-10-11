@@ -14,6 +14,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { MatchingService, spotOfJob } from '../matching/matching.service.js';
 import { MediaPurpose } from '../media/media-rules.js';
+import { VISIBLE_TO_CUSTOMER } from '../offers/visible-offers.js';
 import { MediaService } from '../media/media.service.js';
 import { AvailabilityService } from '../scheduling/availability.service.js';
 import { resolveScheduledFor } from '../scheduling/schedule-time.js';
@@ -254,11 +255,7 @@ export class JobsService {
         review: { select: { rating: true } },
         _count: {
           select: {
-            offers: {
-              where: {
-                status: { in: [OfferStatus.PENDING, OfferStatus.ACCEPTED] },
-              },
-            },
+            offers: { where: VISIBLE_TO_CUSTOMER },
           },
         },
       },

@@ -4,7 +4,6 @@ import type { Prisma } from '../../generated/prisma/client.js';
 import {
   JobMediaKind,
   JobStatus,
-  OfferStatus,
   type CancelledBy,
   type JobTiming,
 } from '../../generated/prisma/enums.js';
@@ -15,6 +14,7 @@ import {
   MAX_ARRIVAL_CODE_RESETS,
 } from './arrival-code.js';
 import { MediaPurpose } from '../media/media-rules.js';
+import { VISIBLE_TO_CUSTOMER } from '../offers/visible-offers.js';
 import { MediaService } from '../media/media.service.js';
 import { ReviewsService, type ReviewView } from '../reviews/reviews.service.js';
 import {
@@ -46,9 +46,7 @@ export const jobInclude = {
   media: { orderBy: { createdAt: 'asc' } },
   _count: {
     select: {
-      offers: {
-        where: { status: { in: [OfferStatus.PENDING, OfferStatus.ACCEPTED] } },
-      },
+      offers: { where: VISIBLE_TO_CUSTOMER },
     },
   },
 } satisfies Prisma.JobInclude;

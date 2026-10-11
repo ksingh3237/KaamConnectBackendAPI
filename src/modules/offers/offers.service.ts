@@ -5,12 +5,14 @@ import {
   JobStatus,
   LeadResponse,
   OfferStatus,
+  VerificationStatus,
 } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { generateArrivalCode } from '../jobs/arrival-code.js';
 import { JobEventsService } from '../jobs/job-events.service.js';
 import { jobInclude } from '../jobs/job-view.service.js';
 import { transition } from '../jobs/state/job-state-machine.js';
+import { VISIBLE_TO_CUSTOMER } from './visible-offers.js';
 import {
   coverageOf,
   spotOfJob,
@@ -66,6 +68,17 @@ const offerNotPending = () =>
     'OFFER_NOT_PENDING',
     409,
     'This quote can no longer be changed',
+  );
+
+/**
+ * The quote is not on offer right now. Deliberately says nothing about why: that the worker is under review is
+ * not the customer's business, and the quote comes back by itself when they are verified again.
+ */
+const offerUnavailable = () =>
+  new AppException(
+    'OFFER_UNAVAILABLE',
+    409,
+    'This quote is not available right now. Choose another quote or check again later.',
   );
 
 export interface OfferForCustomer {
@@ -278,10 +291,7 @@ export class OffersService {
     if (!job) throw notFound('Job');
 
     const offers = await this.prisma.offer.findMany({
-      where: {
-        jobId,
-        status: { in: [OfferStatus.PENDING, OfferStatus.ACCEPTED] },
-      },
+      where: { jobId, ...VISIBLE_TO_CUSTOMER },
       include: { worker: { include: cardInclude } },
     });
     const earliest =
@@ -365,6 +375,14 @@ export class OffersService {
         if (job.status !== JobStatus.OPEN) throw jobNotOpen();
         transition('ACCEPT_OFFER', job.status);
         if (offer.status !== OfferStatus.PENDING) throw offerNotPending();
+        // K-36: a quote from a worker who is not VERIFIED (sent back for review, D-8) is hidden from the
+        // customer, so it cannot be accepted either. Read inside the transaction, with the quote.
+        const owner = await tx.workerProfile.findUnique({
+          where: { userId: offer.workerId },
+          select: { verificationStatus: true },
+        });
+        if (owner?.verificationStatus !== VerificationStatus.VERIFIED)
+          throw offerUnavailable();
 
         const now = new Date();
         // Booking confirmation (BR-16/BR-18): under a per-worker lock, make sure the worker is still
