@@ -2,16 +2,21 @@
 //
 //   npm run build && npm run dev:local
 //
-// What it turns on (each only when you have not already set it, so your .env and shell always win):
+// What it turns on (a value set in your SHELL always wins; the three development-only switches below also override .env,
+// the others only fill gaps in .env):
 //   OTP_DEV_BYPASS=true      the fixed development code 123456 for every number; no SMS is sent. The application
 //                            refuses this setting when NODE_ENV=production, and this script refuses to run then too.
 //   CORS_ORIGINS / REALTIME_CORS_ORIGINS   the Expo web dev server ports, so a browser may call the API.
 //   PUBLIC_BASE_URL          where the local file store's signed upload URLs point.
 //   SOS_WEBHOOK_URL          the local mock SOS receiver (npm run mock:sos).
 // It never reads or prints secrets, and it does not edit .env.
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+
+// What the SHELL set, before .env is read: a value given on the command line always wins over this profile.
+const shellEnv = { ...process.env };
+dotenv.config();
 
 const fail = (message) => {
   console.error(`\nstart-local: ${message}\n`);
@@ -45,6 +50,8 @@ const webOrigins = [
   'http://127.0.0.1:8088',
   'http://localhost:19006',
 ].join(',');
+// Development-only switches the profile turns on even when .env has them off; the rest only fill gaps.
+const FORCED = new Set(['OTP_DEV_BYPASS', 'SMS_PROVIDER', 'STORAGE_PROVIDER']);
 const defaults = {
   NODE_ENV: 'development',
   OTP_DEV_BYPASS: 'true',
@@ -57,8 +64,14 @@ const defaults = {
   // Local development convenience: a worker with both documents is approved on save (refused in production).
   WORKER_VERIFICATION_MODE: process.env.WORKER_VERIFICATION_MODE ?? 'auto',
 };
-for (const [key, value] of Object.entries(defaults))
-  if (!process.env[key]) process.env[key] = value;
+// This profile is the explicit "local development" switch, so for the keys below it OVERRIDES what .env says
+// (a .env that says OTP_DEV_BYPASS=false would otherwise silently defeat the point of running it). A value set in
+// the SHELL still wins, so "OTP_DEV_BYPASS=false npm run dev:local" gives real codes.
+for (const [key, value] of Object.entries(defaults)) {
+  const fromShell = shellEnv[key];
+  if (fromShell !== undefined && fromShell !== '') process.env[key] = fromShell;
+  else if (FORCED.has(key) || !process.env[key]) process.env[key] = value;
+}
 
 console.log(`
 ============================================================
