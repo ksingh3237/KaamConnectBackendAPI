@@ -70,7 +70,7 @@ export class JobEventsService {
       this.publisher.toUser(
         worker.workerId,
         RealtimeEvent.LEAD_NEW,
-        leadPayloadOf(job, worker.distanceKm, false),
+        leadPayloadOf(job, worker.distanceKm, false, job._count.offers),
       );
     }
     return covering.length;
@@ -87,7 +87,7 @@ export class JobEventsService {
     this.publisher.toUser(
       targetWorkerId,
       RealtimeEvent.DIRECT_REQUEST,
-      leadPayloadOf(job, coverage?.distanceKm ?? null, true),
+      leadPayloadOf(job, coverage?.distanceKm ?? null, true, job._count.offers),
     );
   }
 

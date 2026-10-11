@@ -1,4 +1,5 @@
 import { seedReferenceData } from '../../prisma/seed/reference-data.js';
+import { LeadCatchUpService } from '../../src/modules/offers/lead-catch-up.service.js';
 import { api, createTestApp, type TestApp } from '../helpers/app.js';
 import { resetDatabase } from '../helpers/db.js';
 import { customerIn, verifiedWorkerIn } from '../helpers/marketplace.js';
@@ -313,6 +314,37 @@ describe('marketplace performance at launch scale (5,000 workers, 50,000 jobs)',
 
     expect(Number(n)).toBeGreaterThan(1500); // far more than the old 500-row cap
     expect(seen.size).toBe(Number(n));
+  });
+
+  it('lead catch-up: a first position fix that claims a large batch of open leads (Phase 7, Milestone B)', async () => {
+    const worker = await verifiedWorkerIn(t, {
+      area: 'Sector 22',
+      trades: ['plumber', 'electrician'], // two trades: the most a worker can have
+    });
+    const catchUp = t.app.get(LeadCatchUpService);
+    const times: number[] = [];
+    let claimedEach = 0;
+    for (let i = 0; i < 20; i += 1) {
+      // Forget what was sent, so each run claims the whole batch again (the delivery guard is the only memory).
+      await t.prisma.workerLead.deleteMany({
+        where: { workerId: worker.userId },
+      });
+      const start = performance.now();
+      claimedEach = await catchUp.onFix(
+        { workerId: worker.userId, lat: 30.7333, lng: 76.7794, previous: null },
+        Date.now() + (i + 1) * 120_000, // two minutes apart: always "time to look again"
+      );
+      times.push(performance.now() - start);
+    }
+    times.sort((a, b) => a - b);
+    report.push({
+      endpoint: `lead catch-up, first fix (${claimedEach} leads claimed and pushed)`,
+      'p50 ms': percentile(times, 50).toFixed(0),
+      'p95 ms': percentile(times, 95).toFixed(0),
+      'max ms': times[times.length - 1]!.toFixed(0),
+    });
+    expect(claimedEach).toBeGreaterThan(20);
+    expect(percentile(times, 95)).toBeLessThan(P95_BUDGET_MS);
   });
 
   it('serves 20 simultaneous discovery requests without errors', async () => {

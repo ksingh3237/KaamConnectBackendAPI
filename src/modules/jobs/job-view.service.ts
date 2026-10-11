@@ -62,6 +62,11 @@ export const jobInclude = {
 
 export type JobRow = Prisma.JobGetPayload<{ include: typeof jobInclude }>;
 
+/** A job loaded without the quote count (see `jobBaseInclude`). Every `JobRow` is also one of these. */
+export type JobBaseRow = Prisma.JobGetPayload<{
+  include: typeof jobBaseInclude;
+}>;
+
 export interface JobView {
   id: string;
   jobNumber: number;
@@ -289,9 +294,10 @@ export class JobViewService {
 
 /** The privacy-safe summary pushed to workers: no address, no phone, no exact location. */
 export function leadPayloadOf(
-  job: JobRow,
+  job: JobBaseRow,
   distanceKm: number | null,
   isDirect: boolean,
+  offersCount: number,
 ): LeadPayload {
   return {
     id: job.id,
@@ -302,7 +308,7 @@ export function leadPayloadOf(
     urgency: job.timing,
     postedAt: job.createdAt.toISOString(),
     hasVoiceNote: job.media.some((m) => m.kind === JobMediaKind.VOICE_NOTE),
-    offersCount: job._count.offers,
+    offersCount,
     isDirect,
     ...(isDirect && job.expiresAt
       ? { expiresAt: job.expiresAt.toISOString() }

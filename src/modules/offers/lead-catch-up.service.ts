@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { haversineKm } from '../../common/utils/geo.js';
 import { JobStatus, VerificationStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { jobInclude, leadPayloadOf } from '../jobs/job-view.service.js';
+import { jobBaseInclude, leadPayloadOf } from '../jobs/job-view.service.js';
 import {
   coverageOf,
   spotOfJob,
@@ -11,6 +11,7 @@ import {
 import { RealtimeEvent } from '../realtime/events.js';
 import { RealtimePublisher } from '../realtime/realtime-publisher.js';
 import { LeadDeliveryService } from '../scheduling/lead-delivery.service.js';
+import { visibleOfferCounts } from './visible-offers.js';
 import {
   WorkersService,
   type LocationChange,
@@ -129,14 +130,25 @@ export class LeadCatchUpService implements OnModuleInit {
     );
     if (claimed.size === 0) return 0;
 
+    // Up to CANDIDATE_CAP jobs can be claimed at once (a first fix in a busy area): load them without a
+    // join-time quote count and count them in one indexed query (see visibleOfferCounts).
     const jobs = await this.prisma.job.findMany({
       where: { id: { in: [...claimed] } },
-      include: jobInclude,
+      include: jobBaseInclude,
     });
+    const offerCounts = await visibleOfferCounts(
+      this.prisma,
+      jobs.map((j) => j.id),
+    );
     const distance = new Map(reaching.map((r) => [r.id, r.distanceKm]));
     for (const job of jobs) {
       this.publisher.toUser(change.workerId, RealtimeEvent.LEAD_NEW, {
-        ...leadPayloadOf(job, distance.get(job.id) ?? null, false),
+        ...leadPayloadOf(
+          job,
+          distance.get(job.id) ?? null,
+          false,
+          offerCounts.get(job.id) ?? 0,
+        ),
         reason: 'LOCATION' as const,
       });
     }
