@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ALLOW_DISABLED_ACCOUNT_KEY } from '../decorators/allow-disabled-account.decorator.js';
 import type { AuthenticatedRequest } from '../decorators/current-user.decorator.js';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
 import {
@@ -15,7 +16,8 @@ import { PrismaService } from '../../prisma/prisma.service.js';
  * Runs after the JWT guard, on every authenticated HTTP request, and decides from the DATABASE, so a change
  * takes effect on the very next call and not when the access token expires:
  *  - the account must still be active (`ACCOUNT_DISABLED`, 403). The JWT guard only checks the signature and
- *    expiry, so without this a user disabled mid-session could keep working for up to 15 minutes;
+ *    expiry, so without this a user disabled mid-session could keep working for up to 15 minutes. The one
+ *    exception is a route marked @AllowDisabledAccount() (logout, K-37);
  *  - @AdminOnly(): the user must be an active admin;
  *  - @RequireProfile(...): the customer or worker profile must exist, and for `verified` routes the worker
  *    must be VERIFIED.
@@ -51,6 +53,16 @@ export class ProfileGuard implements CanActivate {
       targets,
     );
 
+    // K-37: only for a route that needs nothing but a signed-in user (logout); with a profile or admin
+    // requirement the marker is ignored, so a disabled account stays refused there.
+    const allowDisabled =
+      !requirement &&
+      !adminOnly &&
+      this.reflector.getAllAndOverride<boolean | undefined>(
+        ALLOW_DISABLED_ACCOUNT_KEY,
+        targets,
+      ) === true;
+
     const userId = context.switchToHttp().getRequest<AuthenticatedRequest>()
       .user?.id;
     if (!userId) {
@@ -85,7 +97,7 @@ export class ProfileGuard implements CanActivate {
       // 404, not 403: do not advertise that an admin API exists, not even to a disabled admin.
       if (!user.isActive || !user.isAdmin)
         throw new AppException('NOT_FOUND', 404, 'Not found');
-    } else if (!user.isActive) {
+    } else if (!user.isActive && !allowDisabled) {
       throw new AppException(
         'ACCOUNT_DISABLED',
         403,

@@ -3,6 +3,7 @@ import type { Reflector } from '@nestjs/core';
 import { vi } from 'vitest';
 import { VerificationStatus } from '../../generated/prisma/enums.js';
 import type { PrismaService } from '../../prisma/prisma.service.js';
+import { ALLOW_DISABLED_ACCOUNT_KEY } from '../decorators/allow-disabled-account.decorator.js';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
 import {
   ADMIN_ONLY_KEY,
@@ -23,6 +24,7 @@ describe('ProfileGuard', () => {
     profile?: ProfileRequirement;
     admin?: boolean;
     isPublic?: boolean;
+    allowDisabled?: boolean;
   };
   type UserRow = {
     isActive: boolean;
@@ -42,7 +44,9 @@ describe('ProfileGuard', () => {
             ? meta.admin
             : key === IS_PUBLIC_KEY
               ? meta.isPublic
-              : undefined,
+              : key === ALLOW_DISABLED_ACCOUNT_KEY
+                ? meta.allowDisabled
+                : undefined,
       ),
     };
     const guard = new ProfileGuard(
@@ -168,6 +172,76 @@ describe('ProfileGuard', () => {
       await refused(guard.canActivate(context('u1')), 403, 'ACCOUNT_DISABLED');
       await expect(guard.canActivate(context('u1'))).resolves.toBe(true);
       expect(prisma.user.findUnique).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('K-37: @AllowDisabledAccount() lets a disabled account call that one route (logout)', () => {
+    it('a marked route lets a disabled user through, with the same single is_active lookup', async () => {
+      const { guard, prisma, context } = build(
+        { allowDisabled: true },
+        { isActive: false },
+      );
+      await expect(guard.canActivate(context('u1'))).resolves.toBe(true);
+      expect(prisma.user.findUnique).toHaveBeenCalledTimes(1);
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { id: 'u1' },
+        select: { isActive: true },
+      });
+    });
+
+    it('a marked route still answers 401 for a valid token whose user no longer exists', async () => {
+      const { guard, context } = build({ allowDisabled: true }, null);
+      await refused(guard.canActivate(context('u1')), 401, 'UNAUTHENTICATED');
+    });
+
+    it('the default is unchanged: an unmarked route still refuses a disabled user', async () => {
+      for (const allowDisabled of [undefined, false]) {
+        const { guard, context } = build(
+          { allowDisabled },
+          { isActive: false },
+        );
+        await refused(
+          guard.canActivate(context('u1')),
+          403,
+          'ACCOUNT_DISABLED',
+        );
+      }
+    });
+
+    it('the marker is ignored on a route that also needs a profile: a disabled account stays refused (fails closed)', async () => {
+      for (const profile of [
+        { role: 'customer' as const },
+        { role: 'worker' as const },
+        { role: 'worker' as const, verified: true },
+      ]) {
+        const { guard, context } = build(
+          { allowDisabled: true, profile },
+          {
+            isActive: false,
+            customer: { userId: 'u1' },
+            worker: { verificationStatus: VerificationStatus.VERIFIED },
+          },
+        );
+        await refused(
+          guard.canActivate(context('u1')),
+          403,
+          'ACCOUNT_DISABLED',
+        );
+      }
+    });
+
+    it('the marker is ignored on an admin route: a disabled admin still gets 404', async () => {
+      const { guard, context } = build(
+        { allowDisabled: true, admin: true },
+        { isActive: false, isAdmin: true },
+      );
+      await refused(guard.canActivate(context('u1')), 404, 'NOT_FOUND');
+    });
+
+    it('it does not replace authentication: with nobody signed in a marked route is not judged here (the JWT guard refuses the request)', async () => {
+      const { guard, prisma, context } = build({ allowDisabled: true });
+      await expect(guard.canActivate(context(undefined))).resolves.toBe(true);
+      expect(prisma.user.findUnique).not.toHaveBeenCalled();
     });
   });
 

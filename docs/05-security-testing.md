@@ -313,8 +313,8 @@ Every route that takes an id in its path, called by people who do not own the ob
 |---|---|---|
 | 1 | Cost (K-7): one primary-key lookup per guarded request, reading only the key or status; no N+1; the answer is read fresh each time, which is what makes a re-review (D-8) take effect on the next call | Reviewed, no change. Caching would defeat the "immediate" property |
 | 2 | The guard had no unit tests of its own | Fixed: 20 unit tests cover every branch of the rewritten guard (§12.7), including the single-lookup and fresh-read properties and the 404-not-403 rule for admin routes |
-| 3 | **Confirmed by experiment (K-5 was worse than documented):** `is_active` was only checked on admin routes. A user disabled in the database who still held an unexpired access token (up to 15 minutes) got 200 on `GET /customers/me/jobs`, **201 on `POST /jobs`** and 200 on a worker's `GET /leads`; only `GET /me` refused (401) | **Fixed locally on your decision, §12.7** |
-| 4 | **A worker under review kept the quotes already sent, and customers could still accept them** (K-36) | **Fixed locally on your decision, §12.7** |
+| 3 | **Confirmed by experiment (K-5 was worse than documented):** `is_active` was only checked on admin routes. A user disabled in the database who still held an unexpired access token (up to 15 minutes) got 200 on `GET /customers/me/jobs`, **201 on `POST /jobs`** and 200 on a worker's `GET /leads`; only `GET /me` refused (401) | **Fixed on your decision (commit `c4ba0fb`, pushed), §12.7. Its one consequence, K-37 (a disabled account could not log out), is fixed in the eighth commit, §12.8** |
+| 4 | **A worker under review kept the quotes already sent, and customers could still accept them** (K-36) | **Fixed on your decision (commit `ac7c22a`, pushed), §12.7** |
 
 ### 12.6 Mutation checks of the new tests
 
@@ -346,4 +346,22 @@ Each was made in turn and restored: D-8 (case-sensitive name compare, photo remo
 
 Mutation checks of both fixes, each made in turn and restored: the visibility rule weakened, the accept check removed, the list filter, the job-view count and the list count reverted to the old filter, ACCEPTED no longer always visible; and for K-5 the check removed (e2e and unit), restricted to routes that have a profile requirement (the original gap), and a disabled admin answered with 403 instead of 404. Every one made at least one test fail.
 
-**Choices to know about:** `GET /me` now answers 403 instead of 401 for a disabled account; `POST /auth/logout` is refused for a disabled account, which **leaves the session's refresh tokens unrevoked until someone tries to refresh**: experiment: logout 403, token rows not revoked, re-enable, refresh 200 (an active account is unchanged: 204, revoked, 401). **Proposed adjustment awaiting your decision: let logout bypass the disabled check;** the extra lookup is on routes such as `GET /locations` and `GET /service-categories`, which previously touched no table of their own. The cost is one primary-key read and has not been benchmarked (the benchmark is pending).
+**Choices to know about:** `GET /me` now answers 403 instead of 401 for a disabled account; `POST /auth/logout` was refused for a disabled account, which left the session's refresh tokens unrevoked (K-37, fixed in §12.8). The extra lookup is on routes such as `GET /locations` and `GET /service-categories`, which previously touched no table of their own. The cost is one primary-key read and has not been benchmarked (the benchmark is pending).
+
+### 12.8 K-37 fixed: a disabled account can log out (on your decision, eighth commit)
+
+**The defect (confirmed by experiment before the fix):** the K-5 refusal also covered `POST /auth/logout`, so a disabled user's logout answered `403` and left `refresh_tokens.revoked_at` empty; if the account was re-enabled before anyone tried to refresh, the session the user had tried to end still refreshed (200).
+
+**The fix:** a metadata decorator, `@AllowDisabledAccount()` (`common/decorators/allow-disabled-account.decorator.ts`), is placed on the logout handler. `ProfileGuard` skips only the `ACCOUNT_DISABLED` refusal for a marked route. It still makes its one primary-key lookup, so a valid token for a user that no longer exists is still `401`. The marker **fails closed**: it is ignored on a route that also asks for a profile or admin rights. A valid access token is still required, and `TokenService.logout` still revokes a refresh family only when the token belongs to the caller (`row.userId === userId`), so the change cannot end or widen anyone else's session.
+
+| Check | Test |
+|---|---|
+| A marked route lets a disabled user through with the same single `is_active` lookup; an unmarked route (undefined or false) still refuses; the marker is ignored with a customer, worker or verified-worker requirement and on an admin route; a deleted user is still 401; nobody signed in is not judged here | 6 new guard unit tests (26 in the file) |
+| **Exact exception list:** the routes carrying the marker, enumerated from the router, are exactly `POST /auth/logout`, none public, none admin-only. The "every protected route is refused" probe skips only that list | e2e |
+| A disabled user's logout answers 204 and the refresh row is revoked; after re-enabling, the old refresh token answers `401 REFRESH_REUSED` (the same as after an active user's logout) | e2e |
+| Only the named login is revoked: another device of the same user still refreshes (200) | e2e |
+| A disabled caller naming another user's refresh token revokes nothing (204, silent, the other user's row and the caller's own stay unrevoked) | e2e |
+| No token, or a forged one, is still 401 and revokes nothing | e2e |
+| After logging out a disabled account is still refused (`403`) on a normal route | e2e |
+
+Mutation checks, each made in turn and restored (files compared byte for byte afterwards): the guard ignoring the marker (1 unit and 3 e2e tests fail); the decorator removed from the logout handler (4 e2e tests fail, including the exact-list test); the marker honoured on every route (the K-5 unit tests and the every-route e2e probe fail); and the marker honoured even with a profile or admin requirement (the fail-closed unit test fails). Every one made at least one test fail.

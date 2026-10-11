@@ -9,6 +9,7 @@ import { RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { ModulesContainer } from '@nestjs/core';
 import { seedReferenceData } from '../prisma/seed/reference-data.js';
+import { ALLOW_DISABLED_ACCOUNT_KEY } from '../src/common/decorators/allow-disabled-account.decorator.js';
 import { ADMIN_ONLY_KEY } from '../src/common/decorators/require-profile.decorator.js';
 import { IS_PUBLIC_KEY } from '../src/common/decorators/public.decorator.js';
 import { api, createTestApp, type TestApp } from './helpers/app.js';
@@ -23,9 +24,13 @@ interface RouteInfo {
   url: string;
   isPublic: boolean;
   adminOnly: boolean;
+  allowDisabled: boolean;
 }
 
 const SOME_ID = '0197a0c0-0000-7000-8000-000000000000';
+
+// K-37: the ONLY protected route a disabled account may call. Adding to this list needs a reason.
+const DISABLED_ACCOUNT_EXCEPTIONS = ['POST /auth/logout'];
 
 describe('K-5: a disabled account is refused on every protected route (e2e)', () => {
   let t: TestApp;
@@ -99,6 +104,7 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
             url,
             isPublic,
             adminOnly: flag(ADMIN_ONLY_KEY),
+            allowDisabled: flag(ALLOW_DISABLED_ACCOUNT_KEY),
           });
         }
       }
@@ -167,9 +173,26 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
     );
   });
 
-  it('every protected route answers 403 ACCOUNT_DISABLED to a disabled user holding a valid token', async () => {
+  it('K-37: exactly one route opts out of the disabled-account refusal, POST /auth/logout, and it is a plain authenticated route', () => {
+    const marked = routes.filter((r) => r.allowDisabled);
+    expect(marked.map((r) => r.template).sort()).toEqual(
+      [...DISABLED_ACCOUNT_EXCEPTIONS].sort(),
+    );
+    // The marker is only honoured where no profile or admin rights are needed, and must never sit on a public route.
+    for (const r of marked) {
+      expect(r.isPublic).toBe(false);
+      expect(r.adminOnly).toBe(false);
+    }
+  });
+
+  it('every protected route answers 403 ACCOUNT_DISABLED to a disabled user holding a valid token (except the documented logout exception)', async () => {
     const wrong: string[] = [];
-    for (const route of routes.filter((r) => !r.isPublic && !r.adminOnly)) {
+    for (const route of routes.filter(
+      (r) =>
+        !r.isPublic &&
+        !r.adminOnly &&
+        !DISABLED_ACCOUNT_EXCEPTIONS.includes(r.template),
+    )) {
       const res = await call(route, person.accessToken);
       if (res.status !== 403 || res.body.code !== 'ACCOUNT_DISABLED')
         wrong.push(`${route.template} -> ${res.status} ${res.body.code}`);
@@ -191,7 +214,7 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
     const wrong: string[] = [];
     for (const route of routes.filter((r) => !r.isPublic && !r.adminOnly)) {
       // Skip the route that would end this user's session.
-      if (route.template === 'POST /auth/logout') continue;
+      if (DISABLED_ACCOUNT_EXCEPTIONS.includes(route.template)) continue;
       const res = await call(route, active.accessToken);
       if (res.body?.code === 'ACCOUNT_DISABLED') wrong.push(route.template);
     }
@@ -251,6 +274,117 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
     await t.prisma.user.update({
       where: { id: person.userId },
       data: { isActive: false },
+    });
+  });
+
+  describe('K-37: a disabled account can still log out', () => {
+    const LOGOUT = `${V1}/auth/logout`;
+    const REFRESH = `${V1}/auth/refresh`;
+    const unrevoked = (userId: string) =>
+      t.prisma.refreshToken.count({ where: { userId, revokedAt: null } });
+
+    it('answers 204, revokes the refresh tokens of that login, and the old refresh token is 401 after re-enabling', async () => {
+      const phone = nextPhone();
+      const device = await loginAs(t, phone);
+      expect(await unrevoked(device.userId)).toBe(1);
+      await t.prisma.user.update({
+        where: { id: device.userId },
+        data: { isActive: false },
+      });
+
+      // Before the fix: 403 ACCOUNT_DISABLED, and the row stayed unrevoked.
+      const out = await http.post(
+        LOGOUT,
+        { refreshToken: device.refreshToken },
+        { token: device.accessToken },
+      );
+      expect(out.status).toBe(204);
+      expect(await unrevoked(device.userId)).toBe(0);
+
+      await t.prisma.user.update({
+        where: { id: device.userId },
+        data: { isActive: true },
+      });
+      const after = await http.post(REFRESH, {
+        refreshToken: device.refreshToken,
+      });
+      // A revoked token answers like any replayed one, exactly as after an active user's logout.
+      expect([after.status, after.body.code]).toEqual([401, 'REFRESH_REUSED']);
+    });
+
+    it('revokes only the login named in the request: another device of the same user keeps working (as for an active user)', async () => {
+      const phone = nextPhone();
+      const a = await loginAs(t, phone);
+      const b = await loginAs(t, phone);
+      await t.prisma.user.update({
+        where: { id: a.userId },
+        data: { isActive: false },
+      });
+      await http
+        .post(
+          LOGOUT,
+          { refreshToken: a.refreshToken },
+          { token: a.accessToken },
+        )
+        .then((r) => expect(r.status).toBe(204));
+      expect(await unrevoked(a.userId)).toBe(1); // device b only
+      await t.prisma.user.update({
+        where: { id: a.userId },
+        data: { isActive: true },
+      });
+      expect(
+        (await http.post(REFRESH, { refreshToken: b.refreshToken })).status,
+      ).toBe(200);
+      expect(
+        (await http.post(REFRESH, { refreshToken: a.refreshToken })).status,
+      ).toBe(401);
+    });
+
+    it('is not a way to end somebody else’s session: a disabled caller naming another user’s refresh token revokes nothing', async () => {
+      const victim = await loginAs(t, nextPhone());
+      const caller = await loginAs(t, nextPhone());
+      await t.prisma.user.update({
+        where: { id: caller.userId },
+        data: { isActive: false },
+      });
+      const res = await http.post(
+        LOGOUT,
+        { refreshToken: victim.refreshToken },
+        { token: caller.accessToken },
+      );
+      expect(res.status).toBe(204); // idempotent and silent, as for an active user
+      expect(await unrevoked(victim.userId)).toBe(1);
+      expect(await unrevoked(caller.userId)).toBe(1); // the caller's own login was not named
+    });
+
+    it('still needs a valid access token: no token or a forged one is 401, not a way around the disabled check', async () => {
+      const victim = await loginAs(t, nextPhone());
+      const noToken = await http.post(LOGOUT, {
+        refreshToken: victim.refreshToken,
+      });
+      expect(noToken.status).toBe(401);
+      const forged = await http.post(
+        LOGOUT,
+        { refreshToken: victim.refreshToken },
+        { token: 'not.a.jwt' },
+      );
+      expect(forged.status).toBe(401);
+      expect(await unrevoked(victim.userId)).toBe(1);
+    });
+
+    it('does not open anything else to a disabled account: after logging out it still gets 403 on a normal route', async () => {
+      const u = await loginAs(t, nextPhone());
+      await t.prisma.user.update({
+        where: { id: u.userId },
+        data: { isActive: false },
+      });
+      await http.post(
+        LOGOUT,
+        { refreshToken: u.refreshToken },
+        { token: u.accessToken },
+      );
+      const me = await http.get(`${V1}/me`, { token: u.accessToken });
+      expect([me.status, me.body.code]).toEqual([403, 'ACCOUNT_DISABLED']);
     });
   });
 });

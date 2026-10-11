@@ -1,5 +1,6 @@
 import { Body, Controller, HttpCode, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { AllowDisabledAccount } from '../../common/decorators/allow-disabled-account.decorator.js';
 import {
   CurrentUser,
   type AuthenticatedUser,
@@ -47,6 +48,8 @@ export class AuthController {
     return this.auth.refresh(dto.refreshToken);
   }
 
+  // K-37: a disabled account must still be able to end its session (the refresh tokens are revoked here).
+  @AllowDisabledAccount()
   @Post('logout')
   @HttpCode(204)
   async logout(
