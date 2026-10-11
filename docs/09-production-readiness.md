@@ -39,10 +39,10 @@ Throttling is the first guard, so a flood of unauthenticated calls never reaches
 
 | # | Risk | Why it matters | Recommendation (needs your approval) |
 |---|---|---|---|
-| T-1 | **Everything is keyed by IP.** Mobile networks in India put many phones behind one public address (carrier-grade NAT), as do shared Wi-Fi networks | Counters are per route, so a busy screen's mix of calls does not add up to one budget. The exposure is on routes one client calls **repeatedly**: for example `PUT /workers/me/location` pings (if the app pings every 5 seconds that is 12 a minute per moving worker, so five workers behind one address reach 60 and the rest see `429`; the ping interval is the frontend's choice; the socket event `location:update` is not throttled, so the app should use it), and the single-route auth limits: `refresh` (60 per 15 min per IP allows about 60 users behind one address, since each refreshes every 15 min) and `otp/request` (20 per hour per IP, which a shop or event where many people sign up on one Wi-Fi could exhaust) | An additive **per-user** layer (built as a separate change, section 1.4) protects against one account (or one botnet rotating IPs) abusing the API, but **does not fix the shared-address case**: that needs the per-IP numbers raised for authenticated traffic, which loosens an existing protection and is therefore your decision, best taken with real traffic data |
+| T-1 | **Everything is keyed by IP.** Mobile networks in India put many phones behind one public address (carrier-grade NAT), as do shared Wi-Fi networks | Counters are per route, so a busy screen's mix of calls does not add up to one budget. The exposure is on routes one client calls **repeatedly**: for example `PUT /workers/me/location` pings (if the app pings every 5 seconds that is 12 a minute per moving worker, so five workers behind one address reach 60 and the rest see `429`; the ping interval is the frontend's choice; the socket event `location:update` is not throttled, so the app should use it), and the single-route auth limits: `refresh` (60 per 15 min per IP allows about 60 users behind one address, since each refreshes every 15 min) and `otp/request` (20 per hour per IP, which a shop or event where many people sign up on one Wi-Fi could exhaust) | An additive **per-user** layer (built as a separate change on the branch `feature/phase-7-per-user-throttling`; reviewed in section 1.5) protects against one account (or one botnet rotating IPs) abusing the API, but **does not fix the shared-address case**: that needs the per-IP numbers raised for authenticated traffic, which loosens an existing protection and is therefore your decision, best taken with real traffic data |
 | T-2 | **`TRUST_PROXY` must match the real hop count.** Too low (0 behind a load balancer): every user appears to be the balancer's address, so the whole user base shares each route's 60/min bucket: an outage that looks like load. Too high: a client can forge `X-Forwarded-For` and dodge limits | Easy to get wrong at first deployment | A release-checklist step (section 2): after deploy, make one call from each of two different networks and confirm the request log shows two different masked client addresses (`ip=` in the log line) |
 | T-3 | **In-memory counters per instance** | With 2+ instances limits multiply and are inconsistent; a restart or deploy resets them (an attacker gains a fresh budget every deploy) | Fine for one instance at launch (D-6). Move storage to Redis with the Phase 8 Redis work, before scaling out |
-| T-4 | **Expensive read routes sit under the generic limit.** Discovery costs about 40 to 60 ms of CPU per call (K-15) and one user may make 60 per minute (per route, per IP) | About 17 users doing that continuously would saturate one core. Unlikely at launch unless the app polls discovery (the frontend should confirm it does not), but nothing stops a script | The per-user layer of section 1.4 can carry a lower limit for `GET /workers` (the mechanism exists; **not enabled**, as it would restrict real users); revisit with real traffic |
+| T-4 | **Expensive read routes sit under the generic limit.** Discovery costs about 40 to 60 ms of CPU per call (K-15) and one user may make 60 per minute (per route, per IP) | About 17 users doing that continuously would saturate one core. Unlikely at launch unless the app polls discovery (the frontend should confirm it does not), but nothing stops a script | The per-user layer (reviewed in section 1.5) can carry a lower limit for `GET /workers` (the mechanism exists; **not enabled**, as it would restrict real users); revisit with real traffic |
 | T-5 | **Socket.IO handshakes are not rate limited by the app** | A flood of connection attempts is refused at the handshake (invalid JWT) but still costs the server a little each | Handle at the edge (load balancer or WAF rate rule) when hosting is chosen; not an application change |
 | T-6 | **No limit on `POST /jobs/:id/payment`, cancel, quote and bill routes beyond the default** | Each is guarded by state and ownership (idempotent payment, state machine), so repeated calls do no harm, only cost | Covered by the generic limit; no change |
 | T-7 | **Clients must back off on `429`** (frontend): the throttler sends a `Retry-After` header (present in the installed `@nestjs/throttler` code) | A client that retries immediately makes a limit worse | Frontend: wait for `Retry-After`; to be added to the frontend gap list |
@@ -53,7 +53,7 @@ No per-IP limit was raised or lowered and no route lost a throttle. The only add
 them is a security decision for you, and the strengthening options (T-1, T-4) change behaviour for real users, so they
 want your go-ahead and a test pass of their own.
 
-### 1.4 The per-user limit (built as a separate, additive change; not merged, not enabled anywhere until you merge it)
+### 1.4 The per-user limit (additive; merged into `main` in PR #5, default 240 a minute)
 
 **What it is.** A second rate limit that counts what one signed-in **account** does, whatever address the requests come
 from. It sits **behind** the existing per-IP limit and changes none of its numbers, routes or behaviour.
@@ -86,6 +86,97 @@ fail tests.
 
 **To switch it off or tune it:** set `USER_RATE_LIMIT_PER_MIN` (no code change). There is deliberately no "off": the
 maximum is 100,000 a minute, which is effectively off, and that setting is for tests.
+
+### 1.5 Review of the per-user limit (default 240 a minute)
+
+**Why 240.** *What a person needs:* the API spec says sockets push and "the app never polls"; one scripted end-to-end
+journey (login, post a job, quote, accept, arrive, bill, pay, review) is **37 requests for two users in total** (the CI
+smoke script), about 15 to 20 each; a busy screen makes 5 to 10 calls. 240 a minute is 4 a second sustained, more than
+ten times a busy screen. *What a server can afford:* measured floors (client and server in one process, 20 concurrent
+callers, 6 s each, on a busy laptop) are **141 to 302 requests a second per instance on ordinary routes** and about 22 on
+discovery (K-15). One account at its cap therefore uses about 1.3 to 2.8 % of an instance on ordinary routes and about
+18 % on discovery. This is an **abuse bound, not a capacity plan**: 100 accounts at their cap would be 400 requests a
+second, more than one instance serves, so capacity protection stays an edge concern (T-5).
+
+**Route-specific risks (nothing was changed for any of them).**
+
+| Pattern | Risk at 240 a minute | Verdict |
+|---|---|---|
+| App launch or return to foreground (refetch of the main screens) | 10 to 20 calls in a burst | Fine |
+| Customer on the tracking screen polling every 3 s | 20 a minute | Fine |
+| Worker location by REST every 5 s | 12 a minute (the spec prefers the socket event, which is not counted) | Fine |
+| Onboarding photo and Aadhaar uploads | the files go to storage, not through the API; 3 to 8 presign calls | Fine |
+| Admin review session (queue, verify, reject) | under 30 a minute by hand; a script reviewing hundreds would hit the cap | Acceptable; deliberately **not** exempt |
+| Discovery `GET /workers` | the cap does not protect it: 4 a second is about 18 % of an instance | `@UserThrottle` can carry a lower limit; **not enabled** (it would restrict real users) |
+| SOS | exempt from this layer (the per-IP limit still applies) | Intended |
+| Socket traffic | not counted by either HTTP limit | Edge concern |
+
+**Guard order and the interaction with the per-IP limits (verified by tests and mutation checks).**
+1. Order: per-IP throttle, login, **per-user throttle**, profile/admin check. Putting the user layer before login makes it
+   never fire (no user known yet); a mutation check proves a test notices.
+2. A request refused by the per-IP layer never reaches the user layer, so it adds nothing to a user's counter.
+3. A request refused by the **user** layer has already been counted by the per-IP layer (which runs first and cannot know
+   better). So an abusive account sharing an address still spends that address's per-route budget with its refused
+   attempts. That is exactly the position before this change, not worse, and this layer does not cure it.
+4. Refused hits are not recorded again by the installed throttler's storage, so hammering does not extend a lockout, and
+   its windows slide (a hit log per window), so there is no boundary burst.
+5. Counters are in memory per process (T-3), shared with the per-IP ones; keys are hashes.
+6. **Existing protections are untouched:** the per-IP module settings, every route-level `@Throttle`, and the per-phone
+   OTP rules are not edited by the change (it adds files and one provider line), and an e2e test shows the 60-a-minute
+   per-route per-IP limit still triggers for a signed-in user.
+
+**Ready for CI review.** The e2e setup lowers nothing for other suites (it sets the limit to 100,000 there); the CI smoke
+job runs the built app with the default and needs 37 requests in total; `.env.example` documents the setting; no
+migration; the new variable is optional with a safe default. **Rollout suggestion:** merge with the default and watch the
+request log for `429`s on authenticated routes; a shadow mode that only logs is possible but is not built.
+
+### 1.6 Shared-address throttling: investigation and proposed limits (**no limit was changed**)
+
+**Decision (2026-10-11): the current limits stay unchanged for now.** The configurable-limits proposal (Stage 1 below) stays
+documented and is **not built**; Stage 2 needs real `429` data first. Nothing in this section has been applied.
+
+**What is established.**
+- Limits are per route and per client address. The installed throttler groups **IPv6 clients by their /64 subnet**
+  (its default), so IPv6-native phones, which each receive their own /64, do not share a budget. Sharing is an
+  **IPv4** matter: mobile networks that put many users behind one public address, and shared Wi-Fi.
+- The tightest limits for a shared address are on the sensitive routes, which is the uncomfortable part.
+
+| Route | Per-address limit | One user's plausible use | Users one address supports |
+|---|---|---|---|
+| `POST /auth/otp/request` | 20 per hour | one per login, plus up to two resends | about 7 to 20 logins an hour |
+| `POST /auth/otp/verify` | 30 per 15 min | one or two per login | about 15 to 30 logins per 15 min |
+| `POST /auth/refresh` | 60 per 15 min | one per access token life (15 min) | about 60 active users |
+| `POST /media/presign` | 60 per hour | 3 for onboarding, 1 to 4 per job | about 10 users onboarding per hour |
+| `POST .../arrival-code/reset` | 20 per hour (3 per job in the database) | rare | not a concern |
+| Ordinary routes (default) | 60 per minute **per route** | 1 to 2 a minute per route if the app does not poll | about 30 users |
+| `PUT /workers/me/location` (REST) | 60 per minute | 12 a minute at 5 s | about 5 workers |
+
+**Measured versus assumed.** *Measured:* server throughput (141 to 302 requests a second on ordinary routes), the request
+count of the scripted journey (37 for two users), the exact throttler behaviour including the IPv6 grouping. *Assumed,
+because it cannot be measured today:* how many users share one IPv4 address in the launch cities, and how often the app
+calls each route. There is no production traffic, and the mobile app does not call the API yet. Anything below that
+depends on those two numbers is a proposal to confirm with data, not a measured limit.
+
+**Proposal (nothing is applied; each stage needs your approval).**
+- **Stage 0, now:** no change. Sensitive-route protections stay exactly as they are.
+- **Stage 1, small and does not weaken anything:** (a) make the per-address limits of the sensitive routes configurable
+  by environment variable **with today's values as the defaults**, so an operator can raise one deliberately for a known
+  event (for example a college Wi-Fi at launch) with a restart and no code change; (b) use the existing request log, which
+  already records every `429` with the route and the masked address, to see which routes and addresses are hit once real
+  traffic exists (masking blanks the last part of the address, so counts per address are slightly coarse).
+- **Stage 2, only after Stage 1 shows real `429`s from shared addresses:** raise the default per-address limit of
+  **ordinary routes** from 60 to 120 a minute for requests that present a bearer token (a resolvable `limit` function on the
+  existing setting, about six lines), keeping 60 for requests without one. Sensitive routes are untouched **by
+  construction**: each declares its own explicit limit, which replaces the default. The per-user layer (240 a minute per
+  account) is what makes this safe, since one account stays capped whatever the address does. Effect: ordinary-route users
+  per address about 30 to 60; REST location pings 5 to 10 workers.
+- **Trade-off of Stage 2, stated plainly:** a request that merely carries a bearer header gets the higher limit before its
+  token is checked, so someone can send a fake token to get 120 instead of 60 invalid-token `401`s a minute per route. Those
+  are cheap rejections (no database), so I judge it acceptable, but it is a small loosening on protected routes, hence your
+  approval.
+- **Not proposed, and why:** raising `otp/request`, `otp/verify`, `refresh`, `presign` or the arrival-code limits. The first
+  protects SMS spend, the second and fifth guessing, and the others are inexpensive to leave alone. If a real event needs it,
+  Stage 1(a) does it deliberately and temporarily.
 
 ---
 
@@ -159,62 +250,97 @@ Facts any image or build script must respect:
 | B-10 | **Restore drill** | Me, once staging exists | The recovery time in the runbook | **Open.** Needs B-1 |
 | B-11 | **`btree_gist` on the production database role** (the scheduling migration creates it) | Me, on the real database | The first production migration | **Open.** CI passed only with a superuser |
 | B-12 | **Frontend work:** back off on `429` using `Retry-After`; single-flight token refresh (K-6); send location through the socket event rather than REST pings; "re-upload required" copy (G-15); show the benchmark rate beside "Total saved" (D-5) | Frontend | A smooth first launch | **Open** |
-| B-13 | **Approvals pending:** `DELETE /me` final design (`08` §1.9); the D-9 migration on dev (`08` §2); merging per-user throttling (§1.4); `@nestjs/swagger` (§3) | You | Milestone B items | **Open** |
+| B-13 | **Approvals pending (Milestone B):** the final `DELETE /me` API and data design v3 (`08` §1.9); the D-9 migration, in three separate steps: push, merge, and apply to dev with a backup (`08` §2.11); merging the per-user limit after PR-1 (`09` §1.5) | You | Milestone B items | **Open** |
+| B-14 | **Shared-address throttling** (§1.6) | You, later | Users behind one IPv4 address (carrier NAT, shared Wi-Fi) seeing `429` at launch events | **Decided: current limits unchanged.** The configurable-limits proposal (Stage 1) is documented and not built; revisit with real `429` data |
+| B-15 | **OpenAPI export** (§3) | Me, when its prerequisites exist | A contract check on the API | **Deferred by decision** until response DTOs (at least 30 named response interfaces plus several inline return types) and bearer authentication can be documented accurately; nothing installed |
+| B-16 | **Deletion requests:** counsel (the retention table in `08` §1.6, bill-item text, the statutory time to act); an **approved outcome mechanism** for Door B requesters (`08` §1.2; no SMS until MSG91 is ready). Door B itself starts with an OTP, so it cannot run in production before the MSG91 sender exists (B-2) | You and counsel | Switching `DELETE /me` on in production | **Open** |
 
 ---
 
-## 3. OpenAPI export: `@nestjs/swagger` compatibility report (nothing installed, `package.json` and the lock file untouched)
+## 3. OpenAPI export with `@nestjs/swagger`: verified in an isolated copy (nothing installed in the repository)
 
-### 3.1 Versions checked
+**Status: DEFERRED by decision (2026-10-11)** until the response bodies and bearer authentication can be documented
+accurately. Nothing has been or will be installed or changed in the repository until then. The findings below are kept
+so the work can resume without repeating the investigation.
 
-| Item | Installed here | `@nestjs/swagger` 12.0.2 needs | Fits |
-|---|---|---|---|
-| `@nestjs/common`, `@nestjs/core` | 12.1.2 | `^12.0.0` | yes |
-| `@nestjs/platform-express` (what we use) | 12.1.2 | works with Express; `@fastify/static` is an optional peer we do not need | yes |
-| TypeScript | 6.0.3 | `^5.5.0 \|\| ^6.0.0` (optional peer) | yes |
-| `class-validator` / `class-transformer` | 0.15.1 / 0.5.1 | any (optional peers) | yes |
-| `reflect-metadata` | 0.2.2 | `^0.1.12 \|\| ^0.2.0` | yes |
-| Module format | the project is ESM (`"type": "module"`) | the package is `"type": "module"` with `import`/`require` exports | yes |
-| Node | `engines >=20.19` (local 24.0.0) | `^20.19.0 \|\| >=22.12.0` | yes |
+**How this was checked.** A copy of the project was made outside the repository (no `.git`, no `.env`) and swagger was
+installed **there**; the repository's `package.json`, lock file and `node_modules` were not touched (its `git status` was
+clean throughout). The install used `--ignore-scripts` and both analytics opt-outs.
 
-`latest` is 12.0.2; the `next` tag is an alpha and should not be used. Note: the project's `.npmrc` sets
-`legacy-peer-deps`, so npm would not itself report a peer mismatch; the table above is therefore checked by hand.
+### 3.1 Versions (unchanged from the earlier check)
 
-### 3.2 What installing it would change (an `npm install --dry-run`, run twice; no file was modified)
+Nest 12.1.2 and TypeScript 6.0.3 satisfy `@nestjs/swagger` 12.0.2 (needs Nest `^12`, TypeScript `^5.5 || ^6`; ESM; Node
+`^20.19 || >=22.12`). `class-validator` 0.15.1, `class-transformer` 0.5.1 and `reflect-metadata` 0.2.2 are accepted. The
+project's `legacy-peer-deps` setting would hide a peer mismatch, so these were compared by hand.
 
-Adds 7 packages: `@nestjs/swagger` 12.0.2, `@nestjs/mapped-types` 12.0.0, `swagger-ui-dist` 5.33.0 (about 11.9 MB
-unpacked), `js-yaml` 5.4.2, `argparse` 2.0.1, `@microsoft/tsdoc` 0.17.0 and **`@scarf/scarf` 1.4.0**.
+### 3.2 Exact dependency impact
 
-- **`@scarf/scarf` is an install-analytics package** (a dependency of `swagger-ui-dist`). I read its script from a
-  downloaded copy without running it: its `postinstall` reports install statistics to a third party unless switched off
-  by `SCARF_ANALYTICS=false`, `DO_NOT_TRACK=1` or `scarfSettings.enabled=false` in `package.json`. For a project that
-  handles Aadhaar images, I would not accept that silently: if you approve the dependency, the opt-out goes into CI and
-  the Dockerfile (or the install uses `--ignore-scripts`, which `postinstall: prisma generate` makes inconvenient).
-- The `EBADENGINE` warnings printed by the dry run are about `@angular-devkit/*` (Nest CLI, a dev tool) and my local
-  Node 24.0.0; they are there today, with or without swagger.
-- Not yet known: whether `npm audit` has findings for the new packages (that is only visible after installing).
+| Item | Change |
+|---|---|
+| `package.json` | **one line**: `"@nestjs/swagger": "12.0.2"` under `devDependencies` (exact version, as the database packages are pinned) |
+| Lock file | **7 packages added, all dev-only**: `@nestjs/swagger` 12.0.2, `@nestjs/mapped-types` 12.0.0, `swagger-ui-dist` 5.33.0 (about 11.9 MB), `js-yaml` 5.4.2, `argparse` 2.0.1, `@microsoft/tsdoc` 0.17.0, `@scarf/scarf` 1.4.0. No existing package changed version |
+| Install scripts | **only `@scarf/scarf`** has one (`postinstall`) |
+| `npm audit` | the same 4 high findings as today (Prisma CLI tooling: `@prisma/config`, `deepmerge-ts`, `mysql2`, `prisma`, all dev-only); **none of the 7 new packages is named**; `npm audit --omit=dev` still reports 0 |
+| Production image | contains none of it, since they are devDependencies |
 
-### 3.3 What it can and cannot do for this API (important before you approve)
+### 3.3 The `@scarf/scarf` analytics, verified
 
-- **Can:** list every route with its method and path (64 handlers), path/query parameters, request bodies from the
-  `class-validator` DTO classes (through the `@nestjs/swagger` compiler plugin, so the DTOs do not need hand-written
-  annotations), the global prefix and the bearer-auth requirement.
-- **Cannot, as the code is written:** describe **response bodies**. They are TypeScript `interface`s (`JobView`,
-  `LeadItem`, `WorkerJobsPage` and so on); the plugin only builds schemas from **classes**. Documenting responses means
-  turning those interfaces into classes or annotating each route by hand, which is the larger part of the work.
-- The plugin runs inside `nest build` (the TypeScript compiler), not under Vitest, so the export is produced from the
-  built output. The export script must start the application, which opens the database: fine in CI (a database is
-  there), but it is not a no-dependency step.
+I ran its real script under a preloaded tracer that records every network attempt and **blocks** it, so nothing was sent.
 
-### 3.4 Proposal (needs your approval; nothing is done)
+| Case | Result |
+|---|---|
+| No opt-out | **1 attempt**: an HTTPS request to `scarf.sh/package-event/install` carrying platform, architecture, Node version and hashed package names |
+| `SCARF_ANALYTICS=false` | 0 attempts ("User has opted out") |
+| `DO_NOT_TRACK=1` | 0 attempts |
+| `"scarfSettings": { "enabled": false }` in the root `package.json` (no environment variable) | **0 attempts** ("Scarf has been disabled via a package.json in the dependency chain") |
+| `npm install --ignore-scripts` | the script never runs |
 
-1. `npm install -D @nestjs/swagger@12.0.2` as a **devDependency** with an exact version, as the database packages are
-   pinned. Dev only means the production image never contains `swagger-ui-dist`, and **no documentation endpoint is
-   exposed by the running API**.
-2. The Scarf opt-out as above.
-3. A short spike (about half a day): the plugin in `nest-cli.json`, `scripts/export-openapi.ts`, and a CI step that
-   writes `openapi.json` and fails if it differs from the committed copy ("contract check"). First version covers
-   routes, parameters and request bodies; responses are a follow-up you can schedule.
-4. Document the result in `03-api-spec.md` as generated, not hand-maintained.
+**Recommended configuration:** put `"scarfSettings": { "enabled": false }` in the root `package.json`. It needs no
+environment variable, so it holds on every developer machine, in CI and in the container build. **Ordering matters:**
+the script runs while swagger is being installed, so the opt-out must be in `package.json` *before* the first
+`npm install`. For that very first install run `SCARF_ANALYTICS=false npm install ...`, and commit the opt-out in the same
+commit as the dependency. Belt and braces: also set `SCARF_ANALYTICS=false` in the CI workflow and the Dockerfile.
 
-Decision for you: **approve the dependency (and the Scarf handling), or leave OpenAPI export out of Milestone B.**
+### 3.4 The exact configuration that worked
+
+1. **`nest-cli.json`**: add `"plugins": ["@nestjs/swagger"]` under `compilerOptions` (next to `"deleteOutDir": true`). The
+   plugin runs inside `nest build`, so it reads the DTO classes without hand-written annotations. It does not run under
+   Vitest, which is fine because the export reads the built output.
+2. **`scripts/export-openapi.mjs`** (the spike's script, verbatim in intent): load `dist/app.module.js`; create the app with
+   `NestFactory.create(AppModule, { preview: true, logger: false })`; call `setGlobalPrefix(API_PREFIX, { exclude: ['health',
+   'health/ready'] })` with `API_PREFIX` imported from `dist/app.setup.js` (so the prefix is never copied); build the
+   document with `DocumentBuilder().setTitle(...).setVersion(...).addBearerAuth()`; write it as JSON.
+3. **`package.json`**: a script `"openapi:export": "node scripts/export-openapi.mjs docs/openapi.json"`.
+4. **CI**: after the Build step, run the export with placeholder values for `DATABASE_URL`, `JWT_ACCESS_SECRET` and
+   `OTP_PEPPER` (they only have to pass validation), then `git diff --exit-code docs/openapi.json` as the contract check.
+
+**Results of the spike.** The build with the plugin succeeded (53 s cold; the unmodified project's warm build is 19.5 s, so
+the two are not comparable). The export ran in **15.7 s with no database** (preview mode creates the module graph without
+instantiating providers; the connection string pointed at a closed port) and wrote **64 operations on 55 paths**.
+Two runs were **byte-identical**, which a contract check needs.
+
+### 3.5 What the document contains and what it does not
+
+| Captured | Not captured |
+|---|---|
+| All 64 operations with method and path | **Response bodies: all 64 are the empty schema `{ "type": "object" }`**, because they are TypeScript interfaces (`JobView`, `LeadItem`, ...) and the plugin only reads classes |
+| 30 request-body schemas from the DTO classes, including validator rules (for example the 6-digit code pattern) | Path ids are plain strings (the `ParseUUIDPipe` is not read), so no `uuid` format |
+| Query parameters (for example `categoryId`, `areaId`, `sort`, `limit`, `cursor` on discovery) | **Bearer security is not declared on any operation**; it needs a small step that marks every operation as secured except those carrying the existing `@Public` metadata |
+| 8 body-less action routes correctly without a body (plus the dev-storage binary upload) | Error responses |
+
+So a contract check built on this today **would catch** added or removed routes, changed methods or paths, and changed
+request fields or validators; it **would not catch** a change to a response shape. Documenting responses means converting
+the response interfaces to classes or annotating each route, which is a separate, larger decision.
+
+### 3.6 What must be true before this resumes
+
+1. **Response bodies documented.** At least 30 named response interfaces (`JobView`, `LeadItem`, `WorkerJobsPage`, `Receipt`, `WorkerCard`, ...,
+   counted from the code) plus several inline return types must become classes, or be annotated by hand, so the schemas are
+   real. Until then the export would be accurate only for requests.
+2. **Bearer authentication declared accurately:** every operation secured except those carrying the existing `@Public`
+   metadata (a small step in the export script), and `uuid` formats on id parameters.
+3. **The Scarf opt-out committed in the same commit as the dependency** (3.3), with the first install run under
+   `SCARF_ANALYTICS=false`.
+4. Then the small first PR of 3.4 with its CI contract step. Estimated effort once 1 and 2 are done: about half a day.
+
+Nothing here needs a decision from you today; it is parked.

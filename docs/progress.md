@@ -4,7 +4,7 @@
 
 **One-line summary:** Phases 0–6 are built and green locally: foundation, database, login, profiles/uploads/verification, the marketplace core, scheduling and availability, fulfilment (arrival, bill, completion, payment, tracking, SOS, worker back-out), and now **arrival-code recovery** (a customer can issue a new code, 3 per assignment, 60 s apart, fully audited) and **Phase 6** (reviews and tips, activity extras, worker earnings, "commission saved"). **CI is verified for Phases 0–5:** the GitHub Actions run on PR #1 succeeded (17 steps), and the run after PR #1 was merged into `main` also succeeded (21 steps) (§0.5); **CI also passed for the arrival-recovery and Phase 6 work**: run 38118304386 on PR #2's final commit `2552314` (all 17 steps) and run 38120336005 on `main` after the merge. **Not verified:** the idle-machine performance comparison (pending), real delivery of an SOS alert (no receiver exists), real S3. **Dev database:** the `arrival_code_reset` migration was applied to `KaamConnect` on 2026-10-11 after a verified backup, and the extended built-app smoke test (including the arrival-code reset, a review, earnings and savings) passed against it. PR #1 **was merged into `main` on 2026-10-11 at 03:18:55 UTC, not by me** (I was told not to merge it and did not). The arrival-recovery work, Phase 6 and the smoke-test extension are on the branch `feature/phase-6-and-arrival-recovery` as five commits (you approved the plan) plus a sixth follow-up commit made after the code review (documentation corrections, a schema comment, 11 more tests), and were merged into `main` by you on 2026-10-11 at 07:07:51 UTC (merge commit `7e94da2`; I did not merge it) through **pull request #2**.
 
-**Phase 7, Milestone A (2026-10-11): MERGED into `main` by you as pull request #3 (merge commit `b33f5ec`, 10:14:55 UTC; I did not merge it).** GitHub Actions run 38127145264 passed on the seventh commit `89a3964`, run 38129422267 on the eighth commit `755b97a` (K-37, all 18 steps), and run 38131265301 on `main` after the merge (all read through the public API). It contains: measured and CI-enforced coverage (merged 97.5 % of lines, 89.2 % of branches); D-8 worker re-verification; masked request logging; an IDOR matrix over all 34 routes with an id; a `ProfileGuard` rewrite; and the fixes for **K-5**, **K-36** and **K-37**. **Phase 7, Milestone B is in progress (§0.10)** on `feature/phase-7-milestone-b` (pushed, **no pull request, so GitHub CI has not run on it**) plus two local-only branches that hold changes waiting for your approval. Standing limits until you say otherwise: do not merge any pull request, do not modify `main`, do not start Phase 8, do not apply an unapproved migration, no deploy.
+**Phase 7 (2026-10-11): Milestones A and B are MERGED into `main`, but Phase 7 is NOT complete (§0.11).** You merged pull request #3 (Milestone A, `b33f5ec`), #4 (Milestone B, `2dc462b`) and #5 (per-user rate limit, `9f088e2`); I merged none. GitHub CI passed on every one of those pull requests and on `main` after each merge; the latest is run 38142092820 on `main` `9f088e2` (22 steps, all succeeded). Local verification of `main` `9f088e2`: 317 unit and 741 e2e tests, merged line coverage 97.5 % and branch coverage 89.4 %, typecheck, lint, prettier, build and the migration/drift checks all clean. The D-9 migration is **not** merged: it sits on the local branch `feature/phase-7-d9-reviewed-at` (not pushed) and is applied to the test database only. Standing limits until you say otherwise: do not merge any pull request, do not modify `main`, do not start Phase 8, do not apply a migration you have not approved, no deploy.
 
 ---
 
@@ -146,21 +146,57 @@ Baselines from the same experiment: an **active** user logging out gets 204, the
 **K-37, the fix (eighth commit, `fix: K-37 let a disabled account log out (revoke its own refresh tokens)`):** a metadata decorator `@AllowDisabledAccount()` (`common/decorators/allow-disabled-account.decorator.ts`) is on the logout handler, and `ProfileGuard` skips only the `ACCOUNT_DISABLED` refusal for a marked route. **One deviation from the plan above, on purpose:** the guard keeps its single primary-key lookup instead of skipping it, so a valid token for a user that no longer exists is still `401` (nothing about that behaviour changes). The marker fails closed: it is ignored on a route that also asks for a profile or admin rights. A valid access token is still required, and logout still revokes only a refresh family that belongs to the caller (`row.userId === userId` in `token.service.ts`), so it cannot widen anyone's access. After re-enabling, the old refresh token answers `401 REFRESH_REUSED`, which is how a revoked token answers after an active user's logout too (my plan said `REFRESH_INVALID`; the test showed the real, consistent code). Tests: 6 guard unit tests; 6 e2e tests in `account-disabled.e2e-spec.ts` (exact exception list `POST /auth/logout`; disabled logout 204 and revoked; only the named login revoked; another user's token not revoked; no or forged token 401; still 403 elsewhere afterwards). Mutation checks (§12.8): all caught. Docs updated: `03-api-spec.md §13` and the logout row in `§7`, `05-security-testing.md §12.5` and new `§12.8`, the roadmap, the READMEs and this report.
 
 
-### 0.10 Phase 7, Milestone B (in progress; nothing deployed, no migration applied outside the test database)
+### 0.10 Phase 7, Milestone B (merged in PR #4 and PR #5; the D-9 migration is not merged; nothing deployed, no migration applied outside the test database)
 
 | # | Item | Status | Evidence |
 |---|---|---|---|
-| 1 | Heavy-user benchmark with `EXPLAIN` checks (activity, earnings, savings, schedule) | **Committed and pushed** `531a3e6` | `test/perf/marketplace.perf-spec.ts`; 13 perf tests pass |
-| 2 | Quote-count optimisation: customer list and lead feed count visible quotes for the page's jobs only | **Committed and pushed** `f45e03f`. Customer completed list p50/p95 68/134 and 62/164 ms -> 21/24 and 10/14; lead feed 64/201 and 66/174 -> 21/92 and 16/29 (old and new code alternated, two runs each, on a busy laptop) | 6 e2e + 4 unit tests, 3 mutation checks |
-| 3 | The same for lead catch-up (a batch of up to 300 pushed leads) | **Committed and pushed** `8980e6b`. 58 leads claimed and pushed: p50/p95 122/149 and 122/180 ms -> 16/21 and 30/38 | 3 e2e tests, 3 mutation checks. Full suite 309 unit + 733 e2e |
-| 4 | `DELETE /me` by anonymisation | **Final design written, not implemented** (`docs/08` §1): awaiting your answers on Door B, the job title and the migration, and counsel on retention | design only |
-| 5 | D-9 `reviewed_at` / `reviewed_by` migration | **Drafted and tested; applied to the TEST database only.** On the local branch `feature/phase-7-d9-reviewed-at` (`a995d2c`), **not pushed**. Dev and production untouched | 9 tests, 3 mutation checks, rollback SQL validated in a rolled-back transaction; 309 unit + 742 e2e |
-| 6 | Per-user rate limit (additive) | **Built on the local branch `feature/phase-7-per-user-throttling` (`ff8c18d`), not pushed.** Not merged anywhere | 8 unit + 8 e2e, 5 mutation checks; 317 unit + 741 e2e |
-| 7 | OpenAPI export (`@nestjs/swagger`) | **Compatibility report only** (`docs/09` §3); nothing installed | `npm install --dry-run` |
-| 8 | Production checklist, runbook, launch blockers register B-1 to B-13 | **Written** (`docs/09`, `docs/10`) | documents |
+| 1 | Heavy-user benchmark with `EXPLAIN` checks (activity, earnings, savings, schedule) | **Merged** (PR #4, commit `531a3e6`) | `test/perf/marketplace.perf-spec.ts`; 13 perf tests pass |
+| 2 | Quote-count optimisation: customer list and lead feed count visible quotes for the page's jobs only | **Merged** (PR #4, `f45e03f`). Customer completed list p50/p95 68/134 and 62/164 ms -> 21/24 and 10/14; lead feed 64/201 and 66/174 -> 21/92 and 16/29 (old and new code alternated, two runs each, on a busy laptop) | 6 e2e + 4 unit tests, 3 mutation checks |
+| 3 | The same for lead catch-up (a batch of up to 300 pushed leads) | **Merged** (PR #4, `8980e6b`). 58 leads claimed and pushed: p50/p95 122/149 and 122/180 ms -> 16/21 and 30/38 | 3 e2e tests, 3 mutation checks |
+| 4 | `DELETE /me` by anonymisation | **Final design v3 written, not implemented** (`docs/08` §1). Decided by you: OTP reconfirmation, admin self-deletion refused, refused during active jobs, Door B = OTP-verified request approved by an admin, job title cleared to the service name, no SMS until MSG91 is ready. **Pending:** your approval of the final API and data design, an approved Door B outcome mechanism (option A recommended), and legal review of retention and bill-item text | design only |
+| 5 | D-9 `reviewed_at` / `reviewed_by` migration | **Verified; applied to the TEST database only; NOT merged.** Local branch `feature/phase-7-d9-reviewed-at` (`383fb59`, rebased on `main` `9f088e2`), **not pushed**. 750 e2e + 317 unit pass on it; the 5-migration chain applies to an empty schema with no drift; on 50,000 workers the migration takes about 0.23 s (exclusive lock on `worker_profiles`, share-row-exclusive on `users`, until commit); 0 reviewers invented. Dev and production untouched. Approval package: `docs/08` §2.11 | `docs/08` §2.10 and §2.11 |
+| 6 | Per-user rate limit (additive) | **Merged** (PR #5, `9567f78`; CI passed on the PR and on `main`). 240 a minute per account, SOS exempt, existing per-IP protections untouched. It does not help users who share an address | `docs/09` §1.4 and §1.5 |
+| 7 | OpenAPI export (`@nestjs/swagger`) | **Deferred by decision** until response DTOs and bearer authentication can be documented accurately. Nothing installed; the isolated verification (export works, no database needed, deterministic; Scarf opt-out verified; response bodies and bearer auth not yet captured) is kept for when it resumes | `docs/09` §3 |
+| 7a | Shared-address throttling | **Investigated; decided to leave all limits unchanged.** The staged, configurable-limits proposal stays documented and unbuilt | `docs/09` §1.6 |
+| 8 | Production checklist, runbook, launch blockers register B-1 to B-16 | **Written** (`docs/09`, `docs/10`) | documents |
+| 9 | Pull request plan and checklist | **Written and executed**: PR-1 became #4 and PR-2 became #5 (both merged, CI green). PR-3 (D-9) is still waiting for your approvals | `docs/11-pr-plan.md` |
 
-CI: none of these branches has had a GitHub run (a push alone does not start the workflow, and no pull request was
-opened). Local results above are not CI results.
+CI: pull request #4 (head `d83db84`, run 38141501391), pull request #5 (head `9567f78`, run 38141801737) and `main` after
+each merge (runs 38141767728 and 38142092820) all concluded `success`. The D-9 branch has had no GitHub run (not pushed).
+
+### 0.11 Phase 7 completion check (verified 2026-10-11 against `main` at `9f088e2`)
+
+**Verdict: Phase 7 is NOT complete.** Milestones A and B are done and merged; five items of the roadmap's own Phase 7 list are not
+done, three of them blocked on things only you can supply. Evidence for each line:
+
+| Phase 7 work item (`07-roadmap.md`) | Status | Evidence / what is missing |
+|---|---|---|
+| IDOR matrix tests | **Done** | 34 routes, 100 tests; merged in PR #3; CI green |
+| Throttling tuning | **Partly** | Reviewed (`09` §1). The per-user limit is merged (PR #5). Per-IP limits unchanged by decision; shared-address changes not made; nothing can be tuned without real traffic |
+| Load smoke | **Partly** | The in-repo benchmark (5,000 workers, 50,000 jobs, heavy user, catch-up) passes, taken on a busy laptop. No idle-machine run (blocker B-7); no external load tool; the benchmark is not in CI (K-20) |
+| `EXPLAIN` review | **Done** | Hot queries checked; the real finding (quote counts) fixed in PR #4 with before/after numbers |
+| OpenAPI export + contract check | **Not done** | Deferred by decision until response DTOs and bearer auth can be documented (`09` §3) |
+| Dockerfile / Procfile | **Not done, blocked** | Hosting undecided (B-1) |
+| Production env checklist | **Done as a document** | `09`; not exercised on any real environment |
+| Backup / restore drill | **Not done, blocked** | Needs staging (B-10); the backup commands were run against the test database only |
+| Runbook | **Draft** | `10`, host-neutral; hosting commands and the drill times are missing |
+| `DELETE /me` | **Not done** | Design v3 awaits your approval; legal review pending |
+| Dependency audit | **Done** | Production dependencies: 0 findings. 4 high findings remain, all in the Prisma CLI toolchain (dev only); npm's suggested "fix" is a downgrade to Prisma 6.19.3, which conflicts with the deliberate 7.10 pin |
+| D-9 | **Migration verified, not merged** | See below. The write path, the retention sweep and `StorageService.delete` are not built |
+
+| Phase 7 acceptance criterion | Status |
+|---|---|
+| CI green including the coverage gates | **Met**: run 38142092820 on `main` `9f088e2`, 22 steps, all succeeded |
+| Golden-path e2e against a staging deployment | **Not met**: no staging exists |
+| Migrations applied by the release step on staging, from an empty and from a previous-version database | **Not met** (no staging). The fresh-database path is proven in CI and in a throwaway schema; the incremental path on the test database |
+| `npm audit` clean for high and critical | **Met for production dependencies**; 4 dev-only highs remain (above) |
+
+**Verified on `main` `9f088e2` (local run plus CI):** 317 unit and 741 e2e tests pass; merged line coverage 97.5 % and branch
+coverage 89.4 % with every gate met; typecheck, lint (`--deny-warnings`), prettier and build clean; the 4-migration chain applies
+to an empty schema and matches `schema.prisma` (no drift). **D-9 branch** (`feature/phase-7-d9-reviewed-at`, local only, rebased on
+that `main`): 317 unit and 750 e2e pass; the 5-migration chain applies to an empty schema with no drift; the test database is
+up to date with no drift. Nothing was applied to dev or production.
+
 ---
 
 ## 1. Phase status
@@ -176,7 +212,7 @@ opened). Local results above are not CI results.
 | 5 | **Fulfilment** (go-ahead 2026-10-11): arrival (5-try lock, one job on site at a time), itemised bill with customer approval of the total shown, before/after photos, completion, payment (idempotent) and receipt, live tracking (`job.location`, socket `location:update`), SOS with a pluggable safety channel, `GET /workers/me/jobs`, ownership-based access (D-8), `workerFreed`, worker back-out with booking clean-up and a re-open that re-notifies workers, per-service duration setting (admin) | **Done and verified by tests** (534 e2e, 221 unit, built-app smoke test through COMPLETED). **CI verified** (§0.5). **Not verified:** idle-machine benchmark. **Not built:** see §3.2 | `src/modules/{fulfilment,safety}/`, `jobs/worker-backout.service.ts`, `test/{phase5-requirements,fulfilment}.e2e-spec.ts`; contract `03-api-spec.md §11` |
 | 5b | **Arrival-code recovery** (approved 2026-10-11): customer-issued new code, 3 per assignment, 60 s cooldown, audit trail, `job.arrival_code_reset` | **Built, tested locally; migration applied to dev; smoke-tested in the built app.** Merged in PR #2; CI passed (§0.5) | `modules/fulfilment/arrival-code-reset.service.ts`, migration `20261011150000_arrival_code_reset`, `test/arrival-code-reset.e2e-spec.ts`; contract `03-api-spec.md §11.9` |
 | 6 | **Reviews, activity extras, earnings, savings** (go-ahead 2026-10-11) | **Done and verified by tests locally** (579 e2e, 236 unit, build, lint, types, audit, no schema drift). **Merged in PR #2; CI passed (§0.5).** No migration needed | `src/modules/{reviews,earnings}/`, `test/phase6.e2e-spec.ts`; contract `03-api-spec.md §12` |
-| 7 | Hardening and release | **Milestone A merged into `main` (PR #3, `b33f5ec`); CI passed: run 38127145264 on the seventh commit, 38129422267 on the eighth (K-37), 38131265301 on `main`. Milestone B in progress (§0.10)** (coverage gates, D-8, masked logging, IDOR matrix, `ProfileGuard`, K-5, K-36, K-37): see §0.9. Milestones B onward not started | see §7 |
+| 7 | Hardening and release | **NOT complete (§0.11).** Milestones A and B are merged (PRs #3, #4, #5; CI green on `main` `9f088e2`). Not done: OpenAPI export (deferred), Dockerfile (hosting), restore drill and staging run (no staging), `DELETE /me` (design awaiting approval). D-9: migration verified, unmerged, applied to the test database only | see §0.11 and §7 |
 | 8 | Optional (MSG91, Redis, push, PDF, admin UI) | Not started | |
 
 Roadmap estimate for the remaining work (`docs/07-roadmap.md`): Phase 5 7–8 d, Phase 6 3–4 d (done), Phase 7 4–5 d.
@@ -251,9 +287,9 @@ See `docs/01-requirements.md` FR-SCHEDULING and `03-api-spec.md §10`: booking w
 |---|---|
 | `npm run lint` (oxlint) | 0 warnings, 0 errors |
 | `npm run typecheck` | clean |
-| `npm test` (unit) | **299 / 299** pass, 33 files (Milestone A added 63) |
-| `npm run test:e2e` (real PostgreSQL `KaamConnect_test`, real WebSockets) | **718 / 718** pass, 26 files (Milestone A added 139) |
-| `npm run test:perf` (5,000 workers, 50,000 jobs) | 7 / 7 pass **functionally**. The idle-machine comparison is still **pending** (§3.4) |
+| `npm test` (unit) | **317 / 317** pass, 35 files (`main` `9f088e2`, 2026-10-11) |
+| `npm run test:e2e` (real PostgreSQL `KaamConnect_test`, real WebSockets) | **741 / 741** pass, 29 files (`main` `9f088e2`) |
+| `npm run test:perf` (5,000 workers, 50,000 jobs, heavy user, catch-up) | 13 / 13 pass **functionally**. The idle-machine comparison is still **pending** (§3.4) |
 | `npm run build` | clean |
 | `npm audit --omit=dev` | 0 vulnerabilities |
 | `npm audit` (incl. dev) | 4 high, all dev-only (`deepmerge-ts`, `mysql2` pulled in by the Prisma CLI) |
@@ -263,7 +299,7 @@ See `docs/01-requirements.md` FR-SCHEDULING and `03-api-spec.md §10`: booking w
 | `bash scripts/smoke.sh` on the built app against the dev DB | **passed 2026-10-11 on the migrated database** with the script extended through Phase 6: login -> live lead -> quote -> accept -> wrong code refused -> **customer issues a new code, second reset throttled, old code refused** -> arrive with the new code -> bill -> stale approval refused -> approve -> finish -> pay -> receipt -> COMPLETED -> **review (second refused), worker profile shows it, earnings, commission saved**. The database then showed the `ARRIVAL_CODE_RESET` and `ARRIVAL_RESET_REFUSED` audit rows with the customer as actor and the IP recorded. Its data was removed afterwards (§0.3) |
 
 E2E tests by file: scheduling 64, workers 61, leads-offers 47, customers 44, jobs 41, auth 38, **fulfilment 34**, media 32, **phase5-requirements 27**, direct-booking 27, realtime 24, discovery 23, admin 21, db-constraints 16, marketplace-realtime 13, app 8, catalog 6, seed 5, timestamps 3.
-Code coverage has **not** been measured and no coverage gate exists.
+Coverage **is** measured and enforced in CI (`npm run test:cov`): on `main` `9f088e2` merged line coverage is 97.5 % (auth 94.2 %, jobs 98.9 %, offers 98.1 %, reviews 97.3 %) and branch coverage 89.4 %.
 
 ### 3.4 Benchmark at launch scale (test DB, 5,000 workers, 50,000 jobs, sequential, 40 samples)
 All figures are p95 in ms. "Original" is the single run recorded after Phase 4. "Noisy" is the first run after the scheduling work (the laptop was busy). "Quieter" is three consecutive runs on 2026-10-11 with CPU around 10% (Android Studio, the Android emulator, VS Code and Chrome were still open; "idle" would be too strong).
@@ -459,12 +495,27 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 
 ## 8. Exact next task and recommended next steps
 
-**Where things stand (2026-10-11).** Milestone A is merged into `main` (PR #3, `b33f5ec`; CI passed on `main`). Milestone B is in progress (§0.10): its pushed branch is `feature/phase-7-milestone-b`; two more changes sit on local-only branches until you approve them.
+**Where things stand (2026-10-11).** Milestones A and B are merged (PRs #3, #4, #5); `main` is `9f088e2` and CI is green on it. Phase 7 is **not** complete (§0.11). The D-9 migration is verified but unmerged on a local branch. Nothing is deployed, and no migration has been applied outside the test database.
 
-**Next, in this order:**
-1. **You review** the Milestone B work and answer the pending decisions listed in the last report: the `DELETE /me` design (`docs/08` §1.9), applying the D-9 migration to the development database (`docs/08` §2.6, with a verified backup first), merging the per-user throttle (`docs/09` §1.4), and `@nestjs/swagger` (`docs/09` §3).
-2. **You open a pull request** for the Milestone B branch when you want CI to run on it (I do not create or merge pull requests); I then read the run through the public API.
-3. The launch blockers B-1 to B-13 (`docs/09` §2.4) are tracked there; most need you or a third party.
+**Prioritized remaining backend work** (P0 blocks launch and needs you; P1 needs your approval before I code; P2 needs staging; P3 has no blocker). Blocker ids are in `docs/09` §2.4.
+
+| # | Task | Blocked by | Next step |
+|---|---|---|---|
+| **P0** | **Hosting decision** (B-1): Dockerfile or Procfile, staging, `TRUST_PROXY`, WebSocket settings, secret store | You | Choose the compute host |
+| **P0** | **MSG91 sender and DLT approval** (B-2). Production cannot boot without it (the console sender is refused), and Door B of `DELETE /me` needs it | You (DLT, account), then me | Start DLT registration; then I build the sender (Phase 8 work that is a launch dependency) |
+| **P0** | **SOS receiver and a named on-call person** (B-3), then K-28: retry, admin acknowledge, `sos.acknowledged` | You, then me | Choose a receiver and a person; then I build and test end to end in staging |
+| **P0** | **Real S3**: account, two buckets, encryption, IAM role, first real upload/download/delete (B-4, K-3) | You | Provide the account; I run the first real test |
+| **P0** | **Legal review** (B-8, B-16): Aadhaar images and 7 days; the `DELETE /me` retention table and bill-item text; log and backup retention | You and counsel | Take `docs/08` §1.6 to counsel |
+| **P1** | **D-9, in order:** approve push; approve merge; approve applying to dev with the backup in `docs/08` §2.11; **then** code (write `reviewed_at`/`reviewed_by` on approve, reject and auto-approve; clear on return to PENDING; `StorageService.delete`; `AADHAAR_RETENTION_DAYS`; the sweep with an off switch; S3 lifecycle rule) | Your approvals, then legal for switching the sweep on | Say which approval you give; the migration must reach every database before the code that uses it |
+| **P1** | **`DELETE /me`**: approve design v3 and a Door B outcome mechanism; then migrations (`deleted_at`, `deletion_requested_at`), Door A and Door B, the admin queue, the deletion ledger and restore script, tests | Your approval, counsel, B-2 for Door B | Approve `docs/08` §1.9 items |
+| **P1** | **Area coordinates (13)** and **minutes per service (8)** (B-5, B-6) | You (data) | Supply the numbers; I load and test them |
+| **P2** | **Staging environment**, golden-path e2e against it, migration from empty and from a previous version, **restore drill** (B-10), `btree_gist` on the real database role (B-11), monitoring and alerts, log sink, backups and point-in-time recovery, domain and TLS (B-9) | B-1 | After hosting is chosen |
+| **P2** | Redis seams if more than one instance is ever needed: rate-limit counters, Socket.IO adapter, location catch-up marks (T-3, K-19, K-24) | Scale | Phase 8 |
+| **P3** | **OpenAPI export and contract check** | Response DTOs (at least 30 interfaces to classes) and bearer-auth declaration | Parked by your decision (`docs/09` §3.6) |
+| **P3** | Shared-address limits Stage 1 (configurable sensitive limits at today's values) | Your decision, real `429` data | Parked by your decision (`docs/09` §1.6) |
+| **P3** | Smaller backend items: admin read route for the arrival audit (K-35); worker payment confirmation (K-29); review edit/removal (K-32); `Idempotency-Key` (K-17); the stray export (K-12); the `pg` deprecation watch (K-14); the benchmark in CI (K-20) | Nothing | Pick any; none blocks launch |
+| **You** | Idle-machine benchmark (B-7); frontend work (B-12): back off on `429`, single-flight token refresh, location through the socket, "re-upload required" copy | A quiet machine / frontend time | When convenient |
+| **Phase 8** | MSG91 and WhatsApp OTP beyond the sender above, push notifications, PDF receipts, admin UI, routing/ETA provider | Not started, by instruction | After launch feedback |
 
 **Standing limits (until you lift them):** do not merge a PR; do not modify `main`; do not start Phase 8; do not apply a migration you have not approved (the only one applied outside the test database is none); no deploy; no force push; SOS delivery, real S3, MSG91, the 13 area coordinates, per-service durations and the idle-machine benchmark stay pending; the 90-minute default stays.
 

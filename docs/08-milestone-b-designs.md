@@ -1,11 +1,12 @@
 # 08 · Phase 7, Milestone B: designs awaiting your approval
 
-Status: **proposals only**. Nothing here is implemented, no migration exists under `prisma/`, and no database has been
-touched. Each section ends with the exact questions I need answered before building it.
+Status: **design documents.** Section 1 (`DELETE /me`) is **not implemented** and will not be until you approve this
+final design. Section 2 (D-9) describes a migration that exists on a separate local branch and is applied to the
+**test database only**. No other database has been touched. Each section ends with what I still need from you.
 
 ---
 
-## 1. `DELETE /me`: account deletion by anonymisation (Q-17), final design for approval
+## 1. `DELETE /me`: account deletion by anonymisation (Q-17), final design for approval (v3)
 
 Status: **design v2, incorporating your decisions; not implemented.** I will not start until you approve it.
 
@@ -30,7 +31,8 @@ session proves the device, the code proves control of the phone number, so a sto
 account. The code is checked with the same rules as login (5 wrong tries per code, single use, 5 minutes) but **does
 not create a session**.
 
-**Door B: a disabled account (`POST /auth/deletion-requests`, public, strictly throttled).** A disabled user cannot
+**Door B: a disabled account (`POST /auth/deletion-requests`, public, strictly throttled). Decided by you: OTP proves
+control of the registered number, and an admin must approve.** A disabled user cannot
 hold a session (login and refresh are refused), so the authenticated route cannot work for them. Instead they prove
 control of the number with an OTP and submit `{ "phone", "code" }`. This **records a request** (it does not delete):
 the account was disabled for a reason, possibly an investigation or a safety case, and a code alone (SIM-swap is a
@@ -40,8 +42,24 @@ logged with the admin id). Approval runs the same operation as Door A. The publi
 every phone number (`202`, "if this number belongs to an account, your request has been received"), so it cannot be
 used to find out who has an account. How quickly a request must be answered is a legal question (1.6).
 
-*Alternative for Door B, if you prefer it simpler:* the OTP alone deletes a disabled account at once. I do not
-recommend it, for the reason above, but it removes the admin queue.
+*Considered and rejected:* the OTP alone deleting a disabled account at once. It would let a SIM-swap destroy a flagged
+account's evidence.
+
+**Door B details that follow from the decision.** The request records `users.deletion_requested_at`; an admin sees the
+queue, approves or declines (the decision and the admin id are logged, never the phone number in the clear); a decline
+keeps the account disabled and the request closed. Approval refuses (`409`) if the user has an active job at that moment
+and if the account is an admin account. **How a Door B requester learns the outcome. Decided: not by SMS until MSG91 is ready. The mechanism itself still needs your
+approval.** Two facts shape it. First, Door B starts with an OTP, and an OTP needs a real SMS sender, so **Door B cannot run in
+production before the MSG91 sender exists (blocker B-2)**, whichever way the outcome is delivered. Second, a disabled
+requester has no session, so nothing can be pushed to the app. The options:
+
+| Option | How it works | Cost | Verdict |
+|---|---|---|---|
+| **A. Support call** | The admin who decides phones the registered number (or the number on the support ticket) and records the outcome in the decision log line | No new code, no new column, no new channel; manual | **Recommended for launch** |
+| **B. Pull-based status check** | The requester proves control of the number again with an OTP and calls a public status route that answers only `pending`, `declined` or `completed` (generic otherwise). A decline needs one more nullable column (`users.deletion_declined_at`) so it can be shown | An OTP per check; the same SMS dependency as Door B; one more migration | Later, if call volume makes A impractical |
+| **C. Email or WhatsApp** | Not available: no email address is collected and WhatsApp OTP is Phase 8 | n/a | Rejected for now |
+
+Nothing is built and no SMS is introduced.
 
 | Case | Answer |
 |---|---|
@@ -86,7 +104,7 @@ addressed to a worker are declined (the customer is told, as for any decline).
 | `worker_documents` (Aadhaar) | objects deleted from the private bucket, then rows | Most sensitive data held. Same deletion code as D-9 |
 | `worker_locations`, `worker_trades`, `worker_leads` | deleted | Location data; no longer meaningful |
 | Jobs (as customer or worker) | **kept**: id, number, category, area, status, timing, dates, bill items, payment, review | The other party's history and the business's accounts. The deleted person appears as "Deleted user/worker" |
-| Job free text and address of a deleted **customer** | `address_line` replaced by "(removed)"; `lat`, `lng`, `description` and `arrival_code` cleared; `title` kept (proposed: it is what makes the worker's history readable, but it is free text, so it is on the sign-off list) | The home address and anything typed about the problem |
+| Job free text and address of a deleted **customer** | `address_line` replaced by "(removed)"; `lat`, `lng`, `description` and `arrival_code` cleared; **`title` replaced by the service name** (the category's English title, for example "Plumber"; the column is required, so a neutral label is stored) | The home address and anything typed about the problem, **including the typed title**. What stays is what the business and the other party need: the job number, service, area, dates, status, bill amounts, payment and rating |
 | Job media of those jobs | objects and rows deleted | Pictures of a home and a voice |
 | `offers` | kept; `message` cleared; pending ones `WITHDRAWN` | Free text may contain contact details |
 | `payments`, `bill_items` | kept unchanged | Financial records; period in 1.6 |
@@ -115,7 +133,8 @@ operator script before the application is reopened. The script runs the same ano
 | `reviews` and tips | Kept | May ratings stay after deletion, and for how long? |
 | `sos_alerts` (and the location in them) | Kept as they are | Safety/legal retention period; should coordinates be cleared after some time? |
 | `job_security_events` (IP cleared on deletion) | Kept without the IP | Is the pseudonymous audit trail acceptable, and for how long? |
-| Job `title` and offer text | `title` kept, offer `message` cleared | Is a free-text title personal data to be cleared? |
+| Job `title` and offer text | **Decided: `title` cleared to the service name**; offer `message` cleared | Nothing further; recorded so counsel can see it |
+| Bill item descriptions (text the worker typed on the bill, for example "replaced the kitchen tap") | **Kept as written**, because they are lines of a financial record | Do invoice line descriptions have to stay verbatim, or may they be generalised to the item kind after deletion? I have not assumed either |
 | Aadhaar images | Deleted at account deletion (and 7 days after the decision under D-9) | Is collecting them lawful at all, and is 7 days right? |
 | Application logs | Masked already; retention period to be set with the hosting choice | Maximum retention |
 | Database backups | Retention period to be set with the hosting choice (1.5) | Maximum time deleted data may remain in backups |
@@ -147,13 +166,20 @@ re-signing up with the same phone makes a different user; a retry after a simula
 simultaneous deletions give one success; a quote accepted at the same moment cannot strand a job; the ledger entry is
 written; the restore script re-applies a ledger entry. Plus mutation checks of each guard.
 
-### 1.9 Decisions I still need from you (everything else above is settled by your answers)
+### 1.9 Where this stands
 
-1. **Door B:** admin-approved request (recommended) or OTP-only immediate deletion?
-2. **Job `title`:** keep (proposed) or clear?
-3. **Approve the two column additions** (1.7) as a separate, backed-up step when the time comes?
-4. **Take 1.6 to counsel.** I will build with the defaults in the middle column unless told otherwise, and each is a
-   single constant or query to change.
+**Settled by you:** OTP reconfirmation for active accounts; admin self-deletion refused; refused during active jobs;
+Door B as an OTP-verified request that an admin approves; the typed job title cleared to the service name while the
+business history is kept; anonymisation of personal data; **retention periods and the bill-item text rule pending legal
+review**; no SMS until MSG91 is ready.
+
+**Still needed before I implement anything:**
+1. **Your approval of the final API and data design (v3) as a whole.** I will not start until you give it.
+2. **Approval of one Door B outcome mechanism** (1.2; I recommend A for launch).
+3. **Approval of the column additions** (1.7: `deleted_at`, `deletion_requested_at`, and `deletion_declined_at` only if
+   option B is chosen), as a separate, backed-up step in the same way as D-9.
+4. **Counsel's answers** to the table in 1.6. I will build with the defaults in its middle column, each a single constant
+   or query to change, and nothing is switched on in production before they are given.
 
 ---
 
@@ -215,7 +241,7 @@ migration: the development database has no workers and production does not exist
 
 | Question | Answer |
 |---|---|
-| Locks and speed | Both columns are nullable with no default, so `ADD COLUMN` is a catalogue change with no table rewrite. Creating the foreign key briefly scans `worker_profiles` (milliseconds at thousands of rows). The backfill touches only approved workers |
+| Locks and speed | Both columns are nullable with no default, so `ADD COLUMN` rewrites nothing. **But the three statements run in one transaction, so the locks they take are held until it commits:** `ACCESS EXCLUSIVE` on `worker_profiles` (from `ADD COLUMN`) and `SHARE ROW EXCLUSIVE` on `users` (from the foreign key). Measured (2.10): about 0.23 s in total at 50,000 workers, of which the backfill is 215 ms; reads of `worker_profiles` and writes to `users` wait for that long. At a few thousand workers it is a few tens of milliseconds |
 | Compatibility | Additive. The running code ignores the columns, so the migration can be applied **before** the code that uses it is deployed, and the old code keeps working |
 | Why no `CHECK` tying `reviewed_at` to the status | Many e2e helpers set `verification_status` directly and a check would fail them; the code enforces the pairing instead, and the sweep treats NULL as unknown |
 | Index | None. The sweep reads `worker_profiles` once per run; revisit beyond about 100,000 workers |
@@ -284,3 +310,168 @@ workers without one, setting a reviewer, and overwriting an existing time. Each 
 2. **Approve merging** the migration file (it travels with the branch). Merging does not apply it anywhere: the
    release step does, and dev is applied by hand.
 3. **Counsel:** sign-off on collecting Aadhaar images at all, and on 7 days, is still open (D-9).
+
+### 2.10 Review of the migration (2026-10-11): evidence, not a re-read
+
+Everything below was run against `KaamConnect_test` in a **throwaway schema** (`kc_scratch_d9`, created and dropped by a
+script that refuses any database not named `*_test`, refuses to reuse an existing schema name, and dropped only that
+schema). The test database's own tables were not touched.
+
+| Check | Result |
+|---|---|
+| The whole migration chain (all 5 files) applied to an **empty** schema, as CI does | **Succeeded in 2.8 s**; 5 migrations recorded |
+| `prisma migrate diff` between that fresh result and `schema.prisma` | **No difference** |
+| The SQL the migration contains versus what Prisma derives from the schema change | The two schema statements match exactly (compared statement by statement, offline); the third is the hand-written backfill |
+| The migration on **50,000 workers** (one third approved, one third rejected, one third pending) | `ADD COLUMN` 1.5 ms, foreign key 13.0 ms, backfill 215.1 ms (16,666 rows). Total about 0.23 s |
+| Locks held until commit | `ACCESS EXCLUSIVE` on `worker_profiles`; `SHARE ROW EXCLUSIVE` on `worker_profiles` and on `users` |
+| Backfill outcome at that scale | Exactly the 16,666 approved rows got a time; **0 rows** got a reviewer; rejected and pending rows kept a NULL time |
+| The rollback SQL | Valid (run inside a transaction that was rolled back; the columns disappeared inside it and were back afterwards) |
+
+**Findings.**
+1. *(Corrected here.)* My first description said the foreign key "briefly scans `worker_profiles`". It also takes a lock
+   on `users`, and the locks last until the whole migration commits. The duration is negligible at launch scale, but the
+   statement was incomplete.
+2. *Not a defect, but know it:* if `worker_profiles` ever reached millions of rows, the foreign key should be added
+   `NOT VALID` and validated separately to avoid holding the lock. At the scale of this product that is unnecessary.
+3. *Rollback detail:* after running the reverse SQL, the `_prisma_migrations` row for this migration must be removed by
+   hand, since Prisma has no down migration. That is a manual step on a production database and belongs in the runbook
+   (done: `10-runbook.md`, section 2.2 already says migrations are fixed forward; this adds the exception).
+4. *Test dependency:* the backfill test reads the migration file from `prisma/migrations/...` using the working
+   directory, which is the repository root under both Vitest and CI.
+5. *No defect found* in the backfill: it is idempotent (`reviewed_at IS NULL` guard), never writes `reviewed_by`, and
+   leaves rows with no recorded time alone.
+
+**Residual risks.** The application code that will write the new columns and the retention sweep do not exist yet, so
+this migration changes no behaviour; the real risk of D-9 is the later sweep (deleted images cannot be restored), which
+will ship with an off switch and its own review. Counsel's sign-off on Aadhaar images is still open.
+
+### 2.11 Approval package for the D-9 migration (for your separate approval; nothing below has been run against the development database)
+
+**Status of the branch:** `feature/phase-7-d9-reviewed-at`, commit `ed7ccf8`, **local only: not pushed, not merged, not applied
+anywhere but `KaamConnect_test`.** Pushing, merging and applying to dev are three separate approvals.
+
+#### A. The final diff (3 files, +213 / -2)
+
+| File | Change |
+|---|---|
+| `prisma/migrations/20261011200000_worker_review_audit/migration.sql` | new, 28 lines (below) |
+| `prisma/schema.prisma` | +6 lines, 2 changed (below) |
+| `test/db-constraints.e2e-spec.ts` | +179 lines: the 9 tests described in 2.7 |
+
+The migration, in full:
+
+```sql
+-- AlterTable
+ALTER TABLE "worker_profiles" ADD COLUMN     "reviewed_at" TIMESTAMPTZ(3),
+ADD COLUMN     "reviewed_by" UUID;
+
+-- AddForeignKey
+-- SET NULL: removing an admin account must never remove or block a worker; the decision time stays.
+ALTER TABLE "worker_profiles" ADD CONSTRAINT "worker_profiles_reviewed_by_fkey" FOREIGN KEY ("reviewed_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- Backfill: only what was really recorded. reviewed_by stays NULL everywhere; a REJECTED worker, an approval
+-- with no recorded time and a PENDING worker keep a NULL time.
+UPDATE "worker_profiles"
+SET    "reviewed_at" = "verified_at"
+WHERE  "verification_status" = 'VERIFIED'
+  AND  "verified_at" IS NOT NULL
+  AND  "reviewed_at" IS NULL;
+```
+
+(The file carries longer explanatory comments; the statements are exactly these.) The schema change:
+
+```diff
+ model User {
+-  worker        WorkerProfile?
++  worker        WorkerProfile?   @relation("WorkerUser")
++  reviewedWorkers WorkerProfile[] @relation("WorkerReviewer")
+ model WorkerProfile {
++  reviewedAt         DateTime?  @map("reviewed_at") @db.Timestamptz(3)
++  reviewedById       String?    @map("reviewed_by") @db.Uuid
+-  user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
++  user       User  @relation("WorkerUser", fields: [userId], references: [id], onDelete: Cascade)
++  reviewedBy User? @relation("WorkerReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+```
+
+The two schema statements equal what `prisma migrate diff` derives from this schema change (compared statement by statement,
+offline). No application code reads or writes the columns yet, so applying the migration changes no behaviour.
+
+#### B. Backup and restore commands (the dump command shape was run against `KaamConnect_test` only)
+
+PostgreSQL 18.6 tools live in `C:\Program Files\PostgreSQL\18\bin` (they are not on the Git Bash path). The backups folder is
+`F:\kidsData\kidsData\kuldeep\projects\KaamConnect-db-backups`, outside both repositories, where the two earlier dumps are
+(57 KB and 63 KB). The password comes from the git-ignored `.env` through `PGPASSWORD`; it is never typed into a command
+line or chat.
+
+```powershell
+$bin  = 'C:\Program Files\PostgreSQL\18\bin'
+$dump = 'F:\kidsData\kidsData\kuldeep\projects\KaamConnect-db-backups\KaamConnect-before-d9-reviewed-at-<YYYY-MM-DD>.dump'
+
+# 1. take the backup (custom format, read-only on the database)
+& "$bin\pg_dump.exe" --format=custom --no-owner --host=<host> --port=<port> --username=<user> --dbname=KaamConnect --file=$dump
+
+# 2. prove it is usable BEFORE going further
+(Get-Item $dump).Length                                  # must be well above 0 (earlier dumps: 57-63 KB)
+& "$bin\pg_restore.exe" --list $dump | Select-Object -First 8   # must print a table of contents and "Dumped from database version: 18.x"
+```
+
+Restore **rehearsal** (recommended; it creates a throwaway database, so it needs your OK at the time, and it never touches
+`KaamConnect`):
+
+```powershell
+& "$bin\createdb.exe" --host=<host> --port=<port> --username=<user> KaamConnect_restore_check
+& "$bin\pg_restore.exe" --no-owner --host=<host> --port=<port> --username=<user> --dbname=KaamConnect_restore_check $dump
+# compare row counts of users, jobs, worker_profiles and the 4 rows of _prisma_migrations with KaamConnect, then:
+& "$bin\dropdb.exe" --host=<host> --port=<port> --username=<user> KaamConnect_restore_check
+```
+
+Real restore (**destructive; only on your explicit instruction**, with the application stopped, and only if the targeted
+rollback in C is not enough): drop and recreate `KaamConnect`, then `pg_restore --no-owner --dbname=KaamConnect $dump`.
+
+#### C. Rollback plan
+
+1. **Preferred, targeted** (loses only the two columns' values; the SQL was validated on the test database inside a
+   transaction that was rolled back):
+   ```sql
+   BEGIN;
+   ALTER TABLE "worker_profiles"
+     DROP CONSTRAINT "worker_profiles_reviewed_by_fkey",
+     DROP COLUMN "reviewed_by",
+     DROP COLUMN "reviewed_at";
+   DELETE FROM "_prisma_migrations" WHERE "migration_name" = '20261011200000_worker_review_audit';
+   COMMIT;
+   ```
+   A second person reads both statements first. Without the `DELETE`, `migrate deploy` would believe the migration is still
+   applied.
+2. **Full restore** from the backup in B, only if something else went wrong. It loses everything written since the backup
+   (dev currently holds reference data only).
+3. Nothing else needs undoing: the migration changes no behaviour, and no image or account has been deleted by anything.
+
+#### D. Verification checklist
+
+Before (read-only on dev; confirm each out loud before continuing):
+- [ ] Target confirmed: host, database name `KaamConnect` (**not** `KaamConnect_test`), `NODE_ENV`.
+- [ ] `prisma migrate status`: **4 applied, 1 pending** (`20261011200000_worker_review_audit`), no drift before.
+- [ ] Row counts recorded: users, jobs, worker_profiles, `_prisma_migrations` (the last verified state was 0 users, 0 jobs,
+      reference data only: 8 categories, 3 cities, 13 areas; re-check, do not assume).
+- [ ] Backup taken, size above 0, `pg_restore --list` prints a table of contents, version 18.x.
+- [ ] Restore rehearsal done (optional but recommended), counts equal.
+- [ ] You have said "apply it to dev".
+
+Apply: `npm run db:migrate` from the D-9 branch (`prisma migrate deploy`: apply-only, never resets).
+
+After:
+- [ ] Output ends "All migrations have been successfully applied".
+- [ ] `prisma migrate status`: **5 applied**, up to date.
+- [ ] `prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code` exits 0 (no drift).
+- [ ] `worker_profiles` has `reviewed_at` (timestamptz, nullable) and `reviewed_by` (uuid, nullable); the foreign key
+      exists with delete action `SET NULL`.
+- [ ] Row counts identical to the "before" record; `_prisma_migrations` has 5 rows.
+- [ ] The built application starts against dev and `/health/ready` answers 200 (do **not** run the smoke script: it creates
+      users).
+- [ ] Result written to `progress.md` with the date, the dump's file name and size.
+
+#### E. What stays unapproved
+
+Pushing the branch, opening or merging PR-3, applying to dev, and anything on production. The sweep that deletes images, the
+code that writes the columns, and `DELETE /me` are not part of this migration.
