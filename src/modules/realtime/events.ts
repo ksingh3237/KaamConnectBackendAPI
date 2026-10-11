@@ -17,6 +17,7 @@ export const RealtimeEvent = {
   JOB_LOCATION: 'job.location',
   BILL_UPDATED: 'bill.updated',
   JOB_REOPENED: 'job.reopened',
+  ARRIVAL_CODE_RESET: 'job.arrival_code_reset',
 } as const;
 
 /** Shared by lead.new and direct.request. Deliberately contains no address, phone or exact location. */
@@ -97,6 +98,11 @@ export interface JobLocationPayload {
 export interface BillUpdatedPayload {
   jobId: string;
   total: number;
+}
+
+/** The customer issued a new arrival code. Carries no code: the worker must ask the customer for it. */
+export interface ArrivalCodeResetPayload {
+  jobId: string;
 }
 
 /** The assigned worker backed out and the request is open for quotes again. */

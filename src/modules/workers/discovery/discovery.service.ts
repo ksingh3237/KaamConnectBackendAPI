@@ -20,6 +20,10 @@ import {
   ratingAverage,
   type WorkerCard,
 } from '../worker-card.service.js';
+import {
+  ReviewsService,
+  type WorkerReviewSummary,
+} from '../../reviews/reviews.service.js';
 import type { DiscoverWorkersQueryDto } from './discovery.dto.js';
 
 const DEFAULT_LIMIT = 20;
@@ -34,6 +38,8 @@ export interface WorkerDetail extends WorkerCard {
   languages: Language[];
   radiusKm: number;
   trades: { categoryId: string; title: string; isPrimary: boolean }[];
+  /** Totals, the star split and the ten newest ratings (no reviewer identity). */
+  reviews: WorkerReviewSummary;
 }
 
 /** "Verified Artisans Near You": the customer-side view of workers. */
@@ -45,6 +51,7 @@ export class DiscoveryService {
     private readonly prisma: PrismaService,
     private readonly catalog: CatalogService,
     private readonly cards: WorkerCardService,
+    private readonly reviews: ReviewsService,
   ) {}
 
   async list(
@@ -148,6 +155,7 @@ export class DiscoveryService {
         title: t.category.titleEn,
         isPrimary: t.isPrimary,
       })),
+      reviews: await this.reviews.summaryFor(workerId),
     };
   }
 

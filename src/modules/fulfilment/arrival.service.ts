@@ -2,8 +2,13 @@ import { timingSafeEqual } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { AppException } from '../../common/exceptions/app.exception.js';
 import { violatesConstraint } from '../../common/utils/db-errors.js';
-import { JobStatus } from '../../generated/prisma/enums.js';
+import { Logger } from '@nestjs/common';
+import {
+  JobSecurityEventType,
+  JobStatus,
+} from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { MAX_ARRIVAL_ATTEMPTS } from '../jobs/arrival-code.js';
 import { JobEventsService } from '../jobs/job-events.service.js';
 import {
   JobViewService,
@@ -13,14 +18,13 @@ import {
 import { transition } from '../jobs/state/job-state-machine.js';
 import { jobNotFound } from './job-access.js';
 
-/** Five wrong tries lock the code for that assignment (docs/05-security-testing.md "Arrival code"). */
-export const MAX_ARRIVAL_ATTEMPTS = 5;
+export { MAX_ARRIVAL_ATTEMPTS };
 
 const codeLocked = () =>
   new AppException(
     'CODE_LOCKED',
     429,
-    'Too many wrong codes. Ask the customer to cancel, or back out of this job.',
+    'Too many wrong codes. Ask the customer to issue a new code, or back out of this job.',
   );
 const workerBusy = () =>
   new AppException(
@@ -36,6 +40,8 @@ const workerBusy = () =>
  */
 @Injectable()
 export class ArrivalService {
+  private readonly logger = new Logger(ArrivalService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: JobEventsService,
@@ -46,6 +52,7 @@ export class ArrivalService {
     workerId: string,
     jobId: string,
     code: string,
+    ip?: string,
   ): Promise<JobView> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, workerId },
@@ -88,7 +95,10 @@ export class ArrivalService {
     }
 
     if (!sameCode(attempt.arrival_code, code)) {
-      if (attempt.arrival_attempts >= MAX_ARRIVAL_ATTEMPTS) throw codeLocked();
+      if (attempt.arrival_attempts >= MAX_ARRIVAL_ATTEMPTS) {
+        await this.auditLock(jobId, workerId, ip);
+        throw codeLocked();
+      }
       const left = MAX_ARRIVAL_ATTEMPTS - attempt.arrival_attempts;
       throw new AppException(
         'ARRIVAL_CODE_INVALID',
@@ -126,6 +136,24 @@ export class ArrivalService {
     });
     this.events.statusChanged(arrived);
     return this.views.forWorker(arrived, workerId);
+  }
+
+  /** The fifth wrong code just locked the job: leave a trace for support. Never fails the request. */
+  private async auditLock(jobId: string, workerId: string, ip?: string) {
+    try {
+      await this.prisma.jobSecurityEvent.create({
+        data: {
+          jobId,
+          actorId: workerId,
+          type: JobSecurityEventType.ARRIVAL_LOCKED,
+          ip: ip ?? null,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `could not record the arrival lock for job ${jobId}: ${String(error)}`,
+      );
+    }
   }
 }
 

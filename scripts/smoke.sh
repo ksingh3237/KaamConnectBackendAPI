@@ -2,7 +2,9 @@
 # Boots the BUILT app (dist/) against the configured database and walks the real user journey:
 #   login (dev console OTP) -> protected catalog -> signed photo upload -> customer onboarding
 #   -> worker onboarding + verification -> customer posts a job -> worker gets it live over the
-#   WebSocket -> worker quotes -> customer compares and accepts -> job is ASSIGNED with an arrival code.
+#   WebSocket -> worker quotes -> customer compares and accepts -> job is ASSIGNED with an arrival code
+#   -> customer issues a new code (arrival-code recovery) -> arrive, bill, approve, finish, pay, receipt
+#   -> review, worker earnings, commission saved (Phase 6).
 #
 # Used by CI; also runnable locally after `npm run build`. It needs WORKER_VERIFICATION_MODE=auto
 # (the development shortcut) so the test worker verifies itself. It creates two users (phones
@@ -120,7 +122,14 @@ grep -q 'House 1' "$WS_LOG" && fail "a pushed event leaked the customer's addres
 ARRIVAL_CODE="$(echo "$ACCEPTED" | json 'v.arrivalCode')"
 WRONG_CODE="0000"; [ "$ARRIVAL_CODE" = "0000" ] && WRONG_CODE="1111"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/v1/jobs/$JOB_ID/arrival" -H "$W_AUTH" -H "$JSON" -d "{\"code\":\"$WRONG_CODE\"}")" = "422" ]   || fail "a wrong arrival code was not refused"
-[ "$(curl -sf -X POST "$BASE/api/v1/jobs/$JOB_ID/arrival" -H "$W_AUTH" -H "$JSON" -d "{\"code\":\"$ARRIVAL_CODE\"}" | json 'v.status')" = "ARRIVED" ]   || fail "arrival with the right code did not reach ARRIVED"
+# Arrival-code recovery: the customer issues a new code; the old one stops working; a second reset is throttled.
+RESET="$(curl -sf -X POST "$BASE/api/v1/jobs/$JOB_ID/arrival-code/reset" -H "$C_AUTH" -H "$JSON" -d '{}')" || fail "arrival-code reset"
+NEW_CODE="$(echo "$RESET" | json 'v.arrivalCode')"
+echo "$NEW_CODE" | grep -Eq '^[0-9]{4}$' || fail "the reset did not return a 4-digit code"
+[ "$NEW_CODE" != "$ARRIVAL_CODE" ] || fail "the reset returned the same code"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/v1/jobs/$JOB_ID/arrival-code/reset" -H "$C_AUTH" -H "$JSON" -d '{}')" = "429" ] || fail "a second reset straight away was not throttled"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/v1/jobs/$JOB_ID/arrival" -H "$W_AUTH" -H "$JSON" -d "{\"code\":\"$ARRIVAL_CODE\"}")" = "422" ] || fail "the old arrival code still worked after the reset"
+[ "$(curl -sf -X POST "$BASE/api/v1/jobs/$JOB_ID/arrival" -H "$W_AUTH" -H "$JSON" -d "{\"code\":\"$NEW_CODE\"}" | json 'v.status')" = "ARRIVED" ]   || fail "arrival with the right code did not reach ARRIVED"
 BILL="$(curl -sf -X PUT "$BASE/api/v1/jobs/$JOB_ID/bill-items" -H "$W_AUTH" -H "$JSON"   -d '{"items":[{"kind":"PARTS","description":"PVC elbow","amount":300}]}')" || fail "bill items"
 [ "$(echo "$BILL" | json 'v.total')" = "550" ] || fail "bill total is not 550"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/v1/jobs/$JOB_ID/bill/approve" -H "$C_AUTH" -H "$JSON" -d '{"expectedTotal":250}')" = "409" ]   || fail "approving a stale total was not refused"
@@ -132,4 +141,19 @@ RECEIPT="$(curl -sf "$BASE/api/v1/jobs/$JOB_ID/receipt" -H "$C_AUTH")" || fail "
 [ "$(echo "$RECEIPT" | json 'v.platformFee + "/" + v.total')" = "0/550" ] || fail "receipt does not show a zero platform fee and the right total"
 [ "$(curl -sf "$BASE/api/v1/jobs/$JOB_ID" -H "$C_AUTH" | json 'v.status')" = "COMPLETED" ] || fail "job is not COMPLETED"
 
-echo "SMOKE OK: login, catalog, uploads, onboarding, worker verification, job -> live lead -> quote -> accept -> arrive -> bill -> approve -> finish -> pay -> receipt -> COMPLETED"
+# --- 8. Phase 6: the customer rates the job; earnings and savings reflect it ---
+REVIEW="$(curl -sf -X POST "$BASE/api/v1/jobs/$JOB_ID/review" -H "$C_AUTH" -H "$JSON" -d '{"rating":5,"tags":["PUNCTUAL"],"tipAmount":20}')" || fail "review"
+[ "$(echo "$REVIEW" | json 'v.rating + "/" + v.tipAmount')" = "5/20" ] || fail "the review was not stored as sent"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/v1/jobs/$JOB_ID/review" -H "$C_AUTH" -H "$JSON" -d '{"rating":1}')" = "409" ] || fail "a second review was not refused"
+WORKER_ID="$(echo "$REVIEW" | json 'v.worker.id')"
+PROFILE_CHECK='v.reviews.reviewsCount >= 1 && v.reviews.latest[0].rating === 5'
+EARNINGS_CHECK='v.amount >= 550 && v.jobsDone >= 1 && v.platformFee === 0'
+SAVINGS_CHECK='v.role === "customer" && v.jobsTotal >= 550 && v.commissionSaved === Math.round(v.jobsTotal * v.benchmarkRate)'
+WORKER_VIEW="$(curl -sf "$BASE/api/v1/workers/$WORKER_ID" -H "$C_AUTH")" || fail "worker profile"
+EARNINGS="$(curl -sf "$BASE/api/v1/workers/me/earnings" -H "$W_AUTH")" || fail "worker earnings"
+SAVINGS="$(curl -sf "$BASE/api/v1/me/savings" -H "$C_AUTH")" || fail "savings"
+[ "$(echo "$WORKER_VIEW" | json "$PROFILE_CHECK")" = "true" ] || fail "the worker profile does not show the review"
+[ "$(echo "$EARNINGS" | json "$EARNINGS_CHECK")" = "true" ] || fail "worker earnings do not include the paid job"
+[ "$(echo "$SAVINGS" | json "$SAVINGS_CHECK")" = "true" ] || fail "commission saved is not jobsTotal x benchmarkRate"
+
+echo "SMOKE OK: login, catalog, uploads, onboarding, worker verification, job -> live lead -> quote -> accept -> arrive -> bill -> approve -> finish -> pay -> receipt -> COMPLETED -> review -> earnings -> savings, with an arrival-code reset on the way"

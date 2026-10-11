@@ -6,6 +6,7 @@ import {
   bookingWindow,
   makeCustomer,
   makeJob,
+  makeUser,
   makeWorker,
 } from './helpers/factories.js';
 
@@ -329,6 +330,120 @@ describe('database constraints', () => {
       await expect(review(6)).rejects.toThrow(/reviews_rating_range/);
       await expect(review(5)).resolves.toBeTruthy();
       await expect(review(4)).rejects.toThrow();
+    });
+  });
+
+  describe('arrival-code recovery (columns and the job_security_events audit table)', () => {
+    async function assignedJob() {
+      const customer = await makeCustomer(prisma);
+      const worker = await makeWorker(prisma);
+      const job = await makeJob(prisma, customer.userId, {
+        status: 'ASSIGNED',
+        workerId: worker.userId,
+        arrivalCode: '4821',
+      });
+      return { customer, worker, job };
+    }
+
+    it('a job starts with no resets used and no cooldown', async () => {
+      const { job } = await assignedJob();
+      expect(job.arrivalCodeResets).toBe(0);
+      expect(job.arrivalCodeResetAt).toBeNull();
+    });
+
+    it('the reset counter can never be negative (jobs_arrival_code_resets_nonneg)', async () => {
+      const { job } = await assignedJob();
+      await expect(
+        prisma.job.update({
+          where: { id: job.id },
+          data: { arrivalCodeResets: -1 },
+        }),
+      ).rejects.toThrow(/jobs_arrival_code_resets_nonneg/);
+      // The limit of 3 lives in code, not in the database, so 0 and larger values are accepted here.
+      for (const value of [0, 3, 4]) {
+        await expect(
+          prisma.job.update({
+            where: { id: job.id },
+            data: { arrivalCodeResets: value },
+          }),
+        ).resolves.toBeTruthy();
+      }
+      expect(
+        (await prisma.job.findUniqueOrThrow({ where: { id: job.id } }))
+          .arrivalCodeResets,
+      ).toBe(4);
+    });
+
+    it('an audit event needs an existing job (job_security_events_job_id_fkey)', async () => {
+      await expect(
+        prisma.jobSecurityEvent.create({
+          data: {
+            jobId: '0197a0c0-0000-7000-8000-000000000000',
+            type: 'ARRIVAL_LOCKED',
+          },
+        }),
+      ).rejects.toThrow(/job_security_events_job_id_fkey/);
+    });
+
+    it('a job that has audit events cannot be deleted: the trail is kept (ON DELETE RESTRICT)', async () => {
+      const { customer, job } = await assignedJob();
+      await prisma.jobSecurityEvent.create({
+        data: {
+          jobId: job.id,
+          actorId: customer.userId,
+          type: 'ARRIVAL_CODE_RESET',
+          ip: '203.0.113.7',
+        },
+      });
+      await expect(
+        prisma.job.delete({ where: { id: job.id } }),
+      ).rejects.toThrow(/job_security_events_job_id_fkey/);
+      expect(await prisma.job.count({ where: { id: job.id } })).toBe(1);
+      expect(
+        await prisma.jobSecurityEvent.count({ where: { jobId: job.id } }),
+      ).toBe(1);
+    });
+
+    it('deleting the person who acted keeps the audit row and blanks the actor (ON DELETE SET NULL)', async () => {
+      const { job } = await assignedJob();
+      const actor = await makeUser(prisma); // a bare user: no profile ties it to other rows
+      const event = await prisma.jobSecurityEvent.create({
+        data: {
+          jobId: job.id,
+          actorId: actor.id,
+          type: 'ARRIVAL_RESET_REFUSED',
+          detail: 'COOLDOWN',
+        },
+      });
+      await prisma.user.delete({ where: { id: actor.id } });
+      const kept = await prisma.jobSecurityEvent.findUniqueOrThrow({
+        where: { id: event.id },
+      });
+      expect(kept).toMatchObject({
+        jobId: job.id,
+        actorId: null,
+        type: 'ARRIVAL_RESET_REFUSED',
+        detail: 'COOLDOWN',
+      });
+    });
+
+    it('only the three known event types can be stored', async () => {
+      const { job } = await assignedJob();
+      for (const type of [
+        'ARRIVAL_LOCKED',
+        'ARRIVAL_CODE_RESET',
+        'ARRIVAL_RESET_REFUSED',
+      ] as const) {
+        await prisma.jobSecurityEvent.create({ data: { jobId: job.id, type } });
+      }
+      await expect(
+        prisma.$executeRawUnsafe(
+          `INSERT INTO job_security_events (id, job_id, type) VALUES (gen_random_uuid(), '${job.id}', 'SOMETHING_ELSE')`,
+        ),
+      ).rejects.toThrow(/JobSecurityEventType/);
+      expect(
+        await prisma.jobSecurityEvent.count({ where: { jobId: job.id } }),
+      ).toBe(3);
     });
   });
 });

@@ -3,6 +3,7 @@ import { JobStatus, LeadResponse } from '../../generated/prisma/enums.js';
 import { MatchingService, spotOfJob } from '../matching/matching.service.js';
 import {
   RealtimeEvent,
+  type ArrivalCodeResetPayload,
   type BillUpdatedPayload,
   type BookingConfirmedPayload,
   type JobLocationPayload,
@@ -182,6 +183,12 @@ export class JobEventsService {
   jobReopened(customerId: string, jobId: string): void {
     const payload: JobReopenedPayload = { jobId, reason: 'WORKER_BACKED_OUT' };
     this.publisher.toUser(customerId, RealtimeEvent.JOB_REOPENED, payload);
+  }
+
+  /** The customer issued a new arrival code: tells the worker to ask for it (the code itself is never pushed). */
+  arrivalCodeReset(workerId: string, jobId: string): void {
+    const payload: ArrivalCodeResetPayload = { jobId };
+    this.publisher.toUser(workerId, RealtimeEvent.ARRIVAL_CODE_RESET, payload);
   }
 
   /** Live position of the worker on the way, to whoever is watching the job (the `job:watch` room). */

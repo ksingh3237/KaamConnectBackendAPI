@@ -2,7 +2,7 @@
 
 REST + Socket.IO API for the KaamConnect mobile app (hyperlocal home-services marketplace for Chandigarh · Mohali · Panchkula).
 
-> **Status:** Phase 4 complete: jobs, worker discovery, leads, quotes, direct booking and live Socket.IO push, on top of login, profiles, uploads and verification. Phase 5 (tracking, arrival code, bill, payment, SOS) is next. Design, decisions and roadmap: [docs/](./docs/README.md).
+> **Status:** Phases 0–6 are built and tested: login, profiles, uploads and verification; jobs, worker discovery, leads, quotes, direct booking and live Socket.IO push; scheduling and availability; fulfilment (arrival code with a customer-issued reset, bill, payment, tracking, SOS); and reviews, earnings and savings. GitHub CI has passed for Phases 0–5; the Phase 6 and arrival-recovery work is in review in pull request #2 (not merged), and its CI result is on that PR. Still pending: an SOS receiver and on-call arrangement, the idle-machine benchmark, real S3, verified area coordinates and per-service durations. Design, decisions, roadmap and exact status: [docs/](./docs/README.md) and [docs/progress.md](./docs/progress.md).
 
 ## Tech stack
 

@@ -10,8 +10,13 @@ import {
 } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { spotOfJob } from '../matching/matching.service.js';
+import {
+  MAX_ARRIVAL_ATTEMPTS,
+  MAX_ARRIVAL_CODE_RESETS,
+} from './arrival-code.js';
 import { MediaPurpose } from '../media/media-rules.js';
 import { MediaService } from '../media/media.service.js';
+import { ReviewsService, type ReviewView } from '../reviews/reviews.service.js';
 import {
   WorkerCardService,
   cardInclude,
@@ -92,6 +97,14 @@ export interface JobView {
   worker?: WorkerCard;
   /** Customer only, while the worker is on the way: the code they must be told on arrival. */
   arrivalCode?: string;
+  /** While ASSIGNED: true once five wrong codes locked it. Customer: offer "issue a new code". Worker: "ask the customer for a new code". */
+  arrivalLocked?: boolean;
+  /** Customer only, while ASSIGNED: how many new codes can still be issued. */
+  arrivalResetsLeft?: number;
+  /** COMPLETED jobs, customer and assigned worker only: the rating given, or null while there is none. */
+  review?: ReviewView | null;
+  /** Customer only, COMPLETED: true while the job has not been rated, so the app offers the review screen. */
+  canReview?: boolean;
 }
 
 /** Statuses from which the two parties may call each other. */
@@ -111,6 +124,7 @@ export class JobViewService {
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
     private readonly cards: WorkerCardService,
+    private readonly reviews: ReviewsService,
   ) {}
 
   forCustomer(job: JobRow): Promise<JobView> {
@@ -190,6 +204,10 @@ export class JobViewService {
     };
 
     const maySeeWork = viewer === 'customer' || isAssignedWorker;
+    if (job.status === JobStatus.COMPLETED && maySeeWork) {
+      view.review = await this.reviews.forJob(job.id);
+      if (viewer === 'customer') view.canReview = view.review === null;
+    }
     if (maySeeWork) view.workPhotos = await this.workPhotos(job);
 
     if (viewer === 'customer') {
@@ -203,6 +221,13 @@ export class JobViewService {
       ) {
         view.arrivalCode = job.arrivalCode;
       }
+      if (job.status === JobStatus.ASSIGNED) {
+        view.arrivalLocked = job.arrivalAttempts >= MAX_ARRIVAL_ATTEMPTS;
+        view.arrivalResetsLeft = Math.max(
+          0,
+          MAX_ARRIVAL_CODE_RESETS - job.arrivalCodeResets,
+        );
+      }
     } else {
       view.customer = {
         name: job.customer.fullName,
@@ -213,6 +238,8 @@ export class JobViewService {
             ? job.customer.user.phone
             : null,
       };
+      if (isAssignedWorker && job.status === JobStatus.ASSIGNED)
+        view.arrivalLocked = job.arrivalAttempts >= MAX_ARRIVAL_ATTEMPTS;
       if (isAssignedWorker && job.status !== JobStatus.CANCELLED) {
         view.addressLine = job.addressLine;
         view.lat = job.lat;

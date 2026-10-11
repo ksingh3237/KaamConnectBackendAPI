@@ -1,8 +1,8 @@
 # KaamConnect Backend: Progress Report
 
-**Status as of 2026-10-11 (updated after Phase 5).** Every statement below was checked against the repository on that date (commands are listed in §9). Where something is written but not proven, it says so. Nothing incomplete is marked done.
+**Status as of 2026-10-11 (updated after Phase 6 and arrival-code recovery).** Every statement below was checked against the repository on that date (commands are listed in §9). Where something is written but not proven, it says so. Nothing incomplete is marked done.
 
-**One-line summary:** Phases 0–5 are built and green: foundation, database, login, profiles/uploads/verification, the marketplace core, scheduling and availability, and now **fulfilment** (arrival with the customer's code, itemised bill with customer approval, work photos, completion, payment and receipt, live tracking, SOS, the worker's job list, and a worker backing out with a safe re-open). **Not yet verified:** the GitHub CI workflow (never run; one step was added and only its script was tested locally) and the idle-machine performance comparison (still pending by your instruction). Phase 6 (reviews, earnings, savings) has not started. Everything is still **uncommitted** in git.
+**One-line summary:** Phases 0–6 are built and green locally: foundation, database, login, profiles/uploads/verification, the marketplace core, scheduling and availability, fulfilment (arrival, bill, completion, payment, tracking, SOS, worker back-out), and now **arrival-code recovery** (a customer can issue a new code, 3 per assignment, 60 s apart, fully audited) and **Phase 6** (reviews and tips, activity extras, worker earnings, "commission saved"). **CI is verified for Phases 0–5:** the GitHub Actions run on PR #1 succeeded (17 steps), and the run after PR #1 was merged into `main` also succeeded (21 steps) (§0.5); **the arrival-recovery and Phase 6 work was not through CI when this report was written**: its result is recorded on the new pull request, not here. **Not verified:** the idle-machine performance comparison (pending), real delivery of an SOS alert (no receiver exists), real S3. **Dev database:** the `arrival_code_reset` migration was applied to `KaamConnect` on 2026-10-11 after a verified backup, and the extended built-app smoke test (including the arrival-code reset, a review, earnings and savings) passed against it. PR #1 **was merged into `main` on 2026-10-11 at 03:18:55 UTC, not by me** (I was told not to merge it and did not). The arrival-recovery work, Phase 6 and the smoke-test extension are on the branch `feature/phase-6-and-arrival-recovery` as five commits (you approved the plan) plus a sixth follow-up commit made after the code review (documentation corrections, a schema comment, 11 more tests), reviewed through **pull request #2 into `main`, which is open and not merged**.
 
 ---
 
@@ -26,49 +26,55 @@
 | `workerFreed` / `location.refresh` at completion, back-out, customer cancel | **Complete, tested.** Only helps if the phone answers with a fix (§0.7) | e2e |
 | Worker back-out: booking cleared, lead guard reset and `lead.new` re-sent once per re-open, `BACKED_OUT` rule, direct booking cancelled | **Complete, tested** (regression test confirmed to fail when the reset is removed) | e2e; mutation check |
 | Admin setting for a service's default duration | **Complete, tested** | e2e |
-| **Not built:** worker payment confirmation (`/payment/confirm`), admin SOS acknowledge and the `sos.acknowledged` event, PDF receipts, SOS retry/queue, any way to unlock a locked arrival code, rescheduling a booking, showing the service default duration to the app | **Incomplete / not built** (each confirmed absent in the code today) | §3.2, K-27 to K-29 |
+| **Arrival-code recovery** (`POST /jobs/:id/arrival-code/reset`): customer-only, job ASSIGNED, new random code, tries back to 0, **max 3 per assignment, 60 s cooldown**, audit table `job_security_events`, `job.arrival_code_reset` push (no code), `arrivalLocked` / `arrivalResetsLeft` in the job views | **Complete, tested locally.** Dev migration applied and smoke-tested in the built app (§0.2, §0.3) | `arrival-code-reset.e2e-spec` (16 tests), unit tests (8), plus 6 database-integrity tests in `db-constraints`; mutation checks (cap, cooldown, ownership; then lock audit, throttle, push recipients, the redraw loop, the new CHECK and both foreign keys) each caught |
+| **Phase 6: reviews and tips** (`POST /jobs/:id/review`; 1-5 stars, 5 tags, tip 0-5000 recorded only; once, owner only, after payment; totals never lose a count) | **Complete, tested locally** | `phase6.e2e-spec` |
+| **Phase 6: activity extras** (`rating` / `reviewed` on completed rows for both sides, `review` / `canReview` on the job, review summary with star split and latest ten on `GET /workers/:id`) | **Complete, tested locally** | `phase6.e2e-spec` |
+| **Phase 6: worker earnings** (`GET /workers/me/earnings?period=today\|week\|month`, Asia/Kolkata days) and **savings** (`GET /me/savings`, rate `COMMISSION_BENCHMARK_RATE`, default 0.20) | **Complete, tested locally.** Day boundaries unit-tested at 23:59:59.999 / 00:00 IST | `phase6.e2e-spec` (23 tests in total), `ist-time.spec`, `earnings.service.spec`; five mutation checks caught |
+| **Not built:** worker payment confirmation (`/payment/confirm`), admin SOS acknowledge and the `sos.acknowledged` event, PDF receipts, SOS retry/queue, rescheduling a booking, showing the service default duration to the app | **Incomplete / not built** (each confirmed absent in the code today) | §3.2, K-27 to K-29 |
 | **Approved earlier but still not built (outside Phase 5):** **D-8** a name or photo change on a VERIFIED worker re-opens review; **D-9** Aadhaar images deleted `AADHAAR_RETENTION_DAYS` after the decision | **Not built.** Checked in the code today: `resubmission()` handles only REJECTED profiles and there is no retention job | §4.3 |
 
 ### 0.2 Database migrations
 
 | | Dev `KaamConnect` | Test `KaamConnect_test` |
 |---|---|---|
-| Migrations applied | **3 of 3**: `baseline`, `scheduling_and_availability`, `category_default_duration` | **3 of 3** |
+| Migrations applied | **4 of 4**, including `20261011150000_arrival_code_reset`, applied 2026-10-11 with `npm run db:migrate` (`prisma migrate deploy`) after a verified backup (§0.2 below) | **4 of 4** (applied by the e2e global setup) |
 | Pending / unfinished | none | none |
-| `prisma migrate diff` vs `schema.prisma` | **no difference** | **no difference** |
+| `prisma migrate diff` vs `schema.prisma` | **no difference** (checked after applying, and again after the smoke test) | **no difference** |
 | `btree_gist` | installed (1.8) | installed (1.8) |
 | Data | 0 users, 0 jobs, 0 payments, 0 SOS alerts; reference data 8 / 3 / 13 | emptied and refilled on every e2e run (it held rows during today's check only because the test run was still going) |
 
-Phase 5 added **no** migration. The pre-migration backup of the dev database is `KaamConnect-before-scheduling-2026-10-11.dump`, kept in a `KaamConnect-db-backups` folder next to the repositories on the dev machine (outside both repositories; verified readable when taken). There is no production database yet, so nothing has been migrated anywhere else.
+Phase 5 and Phase 6 added **no** migration; arrival-code recovery added one, applied to dev on 2026-10-11 after a verified backup: `KaamConnect-before-arrival-code-reset-2026-10-11.dump` (63,124 bytes, readable by `pg_restore --list`, kept in the `KaamConnect-db-backups` folder next to the repositories). Before applying I confirmed the target (`localhost`, database `KaamConnect`, `NODE_ENV=development`, 3 migrations, 0 users, 0 jobs); afterwards `migrate status` says up to date, the enum, both columns, the table, its two foreign keys, its index and the CHECK exist as written, and reference data is unchanged (8 / 3 / 13). The smoke test later advanced the `jobs.job_number` sequence to 10003 (it is not reset). The pre-migration backup of the dev database is `KaamConnect-before-scheduling-2026-10-11.dump`, kept in a `KaamConnect-db-backups` folder next to the repositories on the dev machine (outside both repositories; verified readable when taken). There is no production database yet, so nothing has been migrated anywhere else.
 
 ### 0.3 Tests (fresh runs today)
 
 | Check | Result |
 |---|---|
-| Unit (`npm test`) | **221 passed, 0 failed**, 25 files |
-| End-to-end (`npm run test:e2e`, real PostgreSQL and WebSockets) | **534 passed, 0 failed, 0 skipped, 0 todo**, 19 files, 331 s |
-| Pending or failing tests | **None.** A search finds no `it.todo`, `it.skip` or `describe.skip` in `src/` or `test/`. The 22 Phase 5 `todo` entries became 27 real tests |
+| Unit (`npm test`) | **236 passed, 0 failed**, 28 files |
+| End-to-end (`npm run test:e2e`, real PostgreSQL and WebSockets) | **579 passed, 0 failed, 0 skipped, 0 todo**, 21 files (was 534 / 19: +16 arrival-code reset, +6 database integrity, +23 Phase 6), run 2026-10-11 after the review follow-up |
+| Pending or failing tests | **None.** A search finds no `it.todo`, `it.skip` or `describe.skip` in `src/` or `test/`. The 22 Phase 5 `todo` entries became 27 real tests. Re-checked after Phase 6 with escaped patterns: 0 matches |
 | Type-check, lint (oxlint), Prettier check, `npm run build`, `npm audit --omit=dev` | all clean; 0 vulnerabilities |
-| Built-app smoke test (`scripts/smoke.sh`, through COMPLETED) | passed **earlier today** on the dev database; **not re-run** at the end (no source changed after it, only documentation) |
+| Built-app smoke test (`scripts/smoke.sh`, through COMPLETED) | **Passed 2026-10-11 against the migrated dev database**, after I extended it with an arrival-code reset (new code issued, a second reset throttled with 429, the old code refused, arrival with the new code), a review (a second one refused with 409), the worker profile showing it, worker earnings and commission saved. Its data was then removed in one transaction that committed only because the table counts matched the snapshot taken before (reference data only), so dev is back to 0 users and 0 jobs. Three uploaded image files remain in the git-ignored `.local-storage/` folder. **Not yet run in CI** (it will run there on a fresh database once pushed) |
 | Performance suite (`npm run test:perf`) | 7 / 7 pass functionally, last run earlier today; the comparison is pending (§0.6) |
-| Mutation check | six deliberate breakages, all caught (run earlier today) |
+| Mutation check | six breakages after Phase 5, all caught; **then** arrival reset: cap, cooldown and ownership removed one at a time, each caught (1, 3 and 2 failing tests); **then** Phase 6: review ownership, rating totals, IST offset, and the COMPLETED filter in earnings and in savings. Two of those (the COMPLETED filters) first **survived** because my fixtures never exercised them; I strengthened the fixtures and they are now caught. Every file was restored afterwards **Review follow-up (2026-10-11):** the new tests were mutation-checked too: earnings upper bound (`lt` to `lte`), auditing the lock on every refusal, removing the per-address throttle, also pushing the reset to the customer (each caught), the redraw loop count and the missing refusal explanation (unit tests), and, on the **test database only**, dropping the CHECK and turning each new foreign key into `ON DELETE CASCADE` (each caught; the constraints were then restored and their definitions compared with the originals: identical). Production code was not changed by the follow-up. |
 
-### 0.4 Decisions still open: arrival-code recovery and the SOS webhook
+### 0.4 Arrival-code recovery (built, migrated on dev, smoke-tested) and the SOS webhook (design proposed, undecided)
 
 **Neither has been decided.** You have not answered either question, so nothing was changed.
-- **Arrival-code recovery (K-27).** Behaviour today: five wrong codes lock the job for that assignment, and the only ways out are the worker backing out or the customer cancelling. Options: (a) keep it; (b) a customer-side "reset the code" action that issues a new code and clears the tries; (c) let the lock expire after a set time. I have recommended nothing as final; (b) is the smallest change that fixes both a mistyping worker and a customer who misread the code.
-- **SOS webhook (K-28, Q-10).** `SOS_WEBHOOK_URL` is **not set** in the local `.env`. In development alerts only go to the log. **Production refuses to start without an https URL.** To decide: which private channel receives it (a Slack/Teams/PagerDuty bridge or your own endpoint), who watches it around the clock, and whether alerts need an acknowledge/retry flow (not built).
+- **Arrival-code recovery (K-27): approved by you on 2026-10-11 and built.** Limits 3 resets per assignment, 60 s apart. Behaviour and lockout consequences are in `03-api-spec.md §11.9` and `05-security-testing.md §10.1`: after the third reset only the customer cancelling or the worker backing out can free a locked job; a new assignment starts clean. You reviewed the migration and approved applying it to development only; it was applied and verified (§0.2). It has **not** been applied anywhere else, and there is no production database yet.
+- **SOS webhook (K-28, Q-10): still undecided, and nothing was built. The agreed requirements are recorded in `05-security-testing.md §11`.** You have not chosen a receiver or named a 24/7 monitoring person, so none was invented and production SOS stays disabled (boot refuses without an https `SOS_WEBHOOK_URL`). A secure design was proposed in chat (signed requests, delivery table with retry and backoff, admin acknowledge, failure handling) for your review; it needs a migration and will be built only after you approve it and name the receiver.
 - **Q-5 (worker backs out → re-open) and Q-10 (SOS recipient)** were built on their documented defaults because you asked for the documented requirements; they were not separately confirmed.
 
 ### 0.5 Git and GitHub CI
 
 | | Fact (checked today) |
 |---|---|
-| Branch / HEAD | `main` at `8d808e5` ("first commit"); two commits in total, both **docs only** (10 files) |
-| Remote | `origin = https://github.com/ksingh3237/KaamConnectBackendAPI.git`; remote `main` is also `8d808e5`, so **nothing of Phases 0–5 has been pushed** |
-| Uncommitted work | 9 modified tracked files (README + 8 docs), 1 staged deletion (`docs/proposed-schema.prisma`), and 20 untracked top-level entries including `src/`, `test/`, `prisma/`, `scripts/`, `package.json` and **`.github/`**. **I have not committed or pushed anything** |
-| GitHub Actions | The workflow file has never been pushed. The public GitHub API for this repository reports **0 workflow runs**. **No CI run has ever happened, so there is no CI result. CI is NOT verified.** |
-| What was verified locally about the CI file | the YAML parses (15 steps); the new `btree_gist` check step's shell logic exits 0 against local PostgreSQL 18 and exits 1 with its message when the extension is missing. Docker is not installed here, so the container itself was never run |
+| Branch / HEAD | `main` at `d19c4fb`, the merge of PR #1 (2026-10-11 03:18:55 UTC). Before that merge it was `8d808e5` ("first commit"; two docs-only commits, 10 files) |
+| Remote | `origin = https://github.com/ksingh3237/KaamConnectBackendAPI.git`. **PR #1 is merged:** `main` is `d19c4fb` ("Merge pull request #1"), merged 2026-10-11 03:18:55 UTC by a GitHub user action, not by me. `main` therefore now holds Phases 0–5, **but its copy of this report is the stale one** (it still says CI never ran and that the work is uncommitted). The branch `feature/backend-phases-0-5` also holds one later docs-only commit, `6665ea0`, that is **not in `main`** (the PR was already closed when I pushed it); it reaches `main` with the next PR |
+| Commits on the branch | `7c4b8c4` scaffold, tooling and CI workflow; `ce817a7` schema, 3 migrations and seed; `84dc86f` backend phases 0–5 with tests; `fd3f6ce` docs. Working tree clean after the push. The reviewed file set contained no secrets (every value in the git-ignored `.env` was searched for in the committed files: 0 matches); a local path in this report was replaced with a generic description before the commit. Edits made after `fd3f6ce` (this report and the roadmap) are uncommitted until you ask |
+| GitHub Actions | **Verified.** Run [38086756115](https://github.com/ksingh3237/KaamConnectBackendAPI/actions/runs/38086756115), event `pull_request`, head commit `fd3f6ce` (the last commit pushed), status completed, **conclusion success**, about 2 min 37 s. Read from the GitHub API, step by step: checkout, setup-node, `npm ci`, create test database, **btree_gist check**, lint, typecheck, unit tests, **e2e tests against the PostgreSQL 18 service container**, build, production audit, migrations on a fresh database, **drift check**, seed, **smoke test of the built app** — all succeeded. It is the only run so far (total_count 1) |
+| Push-to-`main` run | **Verified.** Run [38107978974](https://github.com/ksingh3237/KaamConnectBackendAPI/actions/runs/38107978974), event `push`, branch `main`, head `d19c4fb`, status completed, **conclusion success**, 21 steps, none unsuccessful, about 2 min 52 s (read from the GitHub API). This closes the gap "the workflow has not run on a push to `main`" |
+| What the runs settled | The `btree_gist` assumption (official `postgres:18` image, `POSTGRES_USER` superuser) is confirmed on GitHub twice. **Still not verified:** `btree_gist` creation by a non-superuser role on RDS |
+| New work (branch `feature/phase-6-and-arrival-recovery`) | Created from `6665ea0`, five commits approved by you: (1) `feat(db)` schema and migration; (2) `feat` arrival-code recovery; (3) `feat` Phase 6 reviews, earnings and savings; (4) `test` extended smoke test; (5) `docs`. A sixth follow-up commit was added after the code review. It is reviewed through **pull request #2 into `main`; the PR is open and not merged**. The commit hashes and the CI result are on that PR and are deliberately **not** written into this report, because a commit cannot contain its own hash and the CI result did not exist when it was written |
 
 ### 0.6 Pending verification: the idle-machine benchmark
 
@@ -82,14 +88,15 @@ Not done. Every run so far had Android Studio, an emulator, VS Code and Chrome o
 | **Verified area coordinates (Q-18)** | **0 of 13 areas have coordinates.** Until they do (or the customer's address carries GPS) matching falls back to "same city", travel gaps assume 30 minutes, and tracking shows no distance or ETA (K-4, K-26) |
 | D-8 name/photo change re-opens review | approved, **not built** |
 | D-9 Aadhaar deletion (7 days, configurable) | approved, **not built**; counsel has not confirmed the rule or whether Aadhaar images may be collected at all |
-| Arrival-code recovery; SOS webhook | open, §0.4 |
+| Arrival-code recovery | **built, applied to dev and smoke-tested** (§0.4) |
+| SOS receiver and monitoring process | **open**: no receiver selected, nobody named; production SOS not enabled |
 | Real S3 bucket test (K-3), hosting (Q-15), MSG91/DLT (production cannot boot without an SMS sender) | open, Phase 7 |
 | Frontend work (G-14 to G-20) | outside this repository |
-| Reviews, tips, earnings, savings (Q-8) | Phase 6, not started |
+| Reviews, tips, earnings, savings (Q-8) | **Phase 6 built and tested locally** (tips are record-only); not yet through CI |
 
-### 0.8 Exact next steps and blockers before Phase 6
+### 0.8 Exact next steps
 
-See §8 for the ordered list. In one line: **there is no technical blocker; Phase 6 needs your explicit "go ahead with phase 6"**, and before that I recommend committing and pushing so CI can run, because six phases of work currently exist only on this laptop.
+See §8 for the ordered list. In one line: **no technical blocker; the open items are decisions and verifications that need you** (review and apply the migration, choose the SOS receiver, supply area coordinates and per-service minutes, an idle machine for the benchmark, approval to commit and push the new work so CI can run on it).
 
 ---
 
@@ -97,18 +104,19 @@ See §8 for the ordered list. In one line: **there is no technical blocker; Phas
 
 | Phase | Scope | Status | Evidence |
 |---|---|---|---|
-| 0 | Scaffold, config validation, health, CI file | **Done** (CI never run on GitHub, see §4) | `src/main.ts`, `src/config/`, `src/health/`, `.github/workflows/ci.yml` |
+| 0 | Scaffold, config validation, health, CI file | **Done** (CI run succeeded 2026-10-11, §0.5) | `src/main.ts`, `src/config/`, `src/health/`, `.github/workflows/ci.yml` |
 | 1 | Schema (19 tables), baseline migration, reference seed, catalog API | **Done** | `prisma/`, `src/modules/catalog/` |
 | 2 | Phone-OTP login, JWT + rotating refresh tokens, `/me`, global login guard | **Done** (MSG91/WhatsApp deliberately not built) | `src/modules/auth/`, `users/` |
 | 3 | Customer + worker profiles, address book, signed uploads, admin verification, worker GPS ping | **Done** (S3 not exercised on real AWS, see §4) | `src/modules/{customers,workers,media,admin}/` |
 | 4 | Jobs, worker discovery, leads, quotes, direct booking, Socket.IO push | **Done** (see §3 for exactly what; Idempotency-Key and search `q` deferred) | `src/modules/{jobs,offers,matching,realtime}/`, `workers/discovery/` |
 | 4b | **Scheduling and availability** (requested 2026-10-10, decisions D-11 to D-14 approved 2026-10-11): `scheduledFor`, booking windows, overlap + travel-gap checks, one in progress + many future bookings, lead accept/decline, `worker_leads` duplicate guard, future-work radius (opt-in), location catch-up, worker calendar, per-service default job length | **Done and applied** to the test and the dev database. **Not covered:** the Phase 5 endpoints that start and finish work, and a worker backing out (K-22) | `src/modules/scheduling/`, `offers/lead-catch-up.service.ts`, migrations `20261010180000_scheduling_and_availability` and `20261011090000_category_default_duration`, `test/scheduling.e2e-spec.ts`; contract in `03-api-spec.md §10` |
-| 5 | **Fulfilment** (go-ahead 2026-10-11): arrival (5-try lock, one job on site at a time), itemised bill with customer approval of the total shown, before/after photos, completion, payment (idempotent) and receipt, live tracking (`job.location`, socket `location:update`), SOS with a pluggable safety channel, `GET /workers/me/jobs`, ownership-based access (D-8), `workerFreed`, worker back-out with booking clean-up and a re-open that re-notifies workers, per-service duration setting (admin) | **Done and verified by tests** (534 e2e, 221 unit, built-app smoke test through COMPLETED). **Not verified:** CI on GitHub, idle-machine benchmark. **Not built:** see §3.2 | `src/modules/{fulfilment,safety}/`, `jobs/worker-backout.service.ts`, `test/{phase5-requirements,fulfilment}.e2e-spec.ts`; contract `03-api-spec.md §11` |
-| 6 | Reviews, activity extras, earnings, savings | Not started | |
+| 5 | **Fulfilment** (go-ahead 2026-10-11): arrival (5-try lock, one job on site at a time), itemised bill with customer approval of the total shown, before/after photos, completion, payment (idempotent) and receipt, live tracking (`job.location`, socket `location:update`), SOS with a pluggable safety channel, `GET /workers/me/jobs`, ownership-based access (D-8), `workerFreed`, worker back-out with booking clean-up and a re-open that re-notifies workers, per-service duration setting (admin) | **Done and verified by tests** (534 e2e, 221 unit, built-app smoke test through COMPLETED). **CI verified** (§0.5). **Not verified:** idle-machine benchmark. **Not built:** see §3.2 | `src/modules/{fulfilment,safety}/`, `jobs/worker-backout.service.ts`, `test/{phase5-requirements,fulfilment}.e2e-spec.ts`; contract `03-api-spec.md §11` |
+| 5b | **Arrival-code recovery** (approved 2026-10-11): customer-issued new code, 3 per assignment, 60 s cooldown, audit trail, `job.arrival_code_reset` | **Built, tested locally; migration applied to dev; smoke-tested in the built app.** Not yet through CI | `modules/fulfilment/arrival-code-reset.service.ts`, migration `20261011150000_arrival_code_reset`, `test/arrival-code-reset.e2e-spec.ts`; contract `03-api-spec.md §11.9` |
+| 6 | **Reviews, activity extras, earnings, savings** (go-ahead 2026-10-11) | **Done and verified by tests locally** (579 e2e, 236 unit, build, lint, types, audit, no schema drift). **Not yet through CI.** No migration needed | `src/modules/{reviews,earnings}/`, `test/phase6.e2e-spec.ts`; contract `03-api-spec.md §12` |
 | 7 | Hardening and release | Not started | see §7 |
 | 8 | Optional (MSG91, Redis, push, PDF, admin UI) | Not started | |
 
-Roadmap estimate for the remaining work (`docs/07-roadmap.md`): Phase 5 7–8 d, Phase 6 3–4 d, Phase 7 4–5 d.
+Roadmap estimate for the remaining work (`docs/07-roadmap.md`): Phase 5 7–8 d, Phase 6 3–4 d (done), Phase 7 4–5 d.
 
 ---
 
@@ -149,7 +157,7 @@ See `docs/01-requirements.md` FR-SCHEDULING and `03-api-spec.md §10`: booking w
 
 ## 3. Current implementation status
 
-### 3.1 Routes that exist (60 handlers counted from the controllers; all under `/api/v1` except health)
+### 3.1 Routes that exist (64 handlers counted from the controllers; all under `/api/v1` except health)
 | Area | Routes |
 |---|---|
 | Health (public) | `GET /health`, `GET /health/ready` |
@@ -163,15 +171,16 @@ See `docs/01-requirements.md` FR-SCHEDULING and `03-api-spec.md §10`: booking w
 | Jobs | `POST /jobs`, `POST /jobs/direct-booking`, `GET /jobs/:id`, `POST /jobs/:id/cancel` (customer cancels, or the assigned worker backs out), `POST /jobs/:id/direct/accept`, `POST /jobs/:id/direct/decline` |
 | Leads and quotes | `GET /leads`, `GET /leads/:id`, `POST /leads/:id/accept`, `POST /leads/:id/decline`, `POST /leads/:id/offers`, `PATCH/DELETE /offers/:id`, `GET /jobs/:id/offers`, `POST /jobs/:id/offers/:offerId/accept` |
 | Schedule | `GET /workers/me/schedule` |
-| Fulfilment | `POST /jobs/:id/arrival`, `PUT /jobs/:id/bill-items`, `GET /jobs/:id/bill`, `POST /jobs/:id/bill/approve`, `POST /jobs/:id/work-photos`, `POST /jobs/:id/complete-work`, `POST /jobs/:id/payment`, `GET /jobs/:id/receipt`, `GET /jobs/:id/tracking`, `GET /workers/me/jobs` |
+| Fulfilment | `POST /jobs/:id/arrival`, `PUT /jobs/:id/bill-items`, `GET /jobs/:id/bill`, `POST /jobs/:id/bill/approve`, `POST /jobs/:id/work-photos`, `POST /jobs/:id/complete-work`, `POST /jobs/:id/payment`, `GET /jobs/:id/receipt`, `GET /jobs/:id/tracking`, `GET /workers/me/jobs`, **`POST /jobs/:id/arrival-code/reset`** |
 | Safety | `POST /jobs/:id/sos` |
+| Reviews and money views (Phase 6) | `POST /jobs/:id/review`, `GET /workers/me/earnings`, `GET /me/savings`; `GET /workers/:id` now also returns the review summary |
 | Admin | `GET /admin/workers`, `POST /admin/workers/:id/verify`, `POST /admin/workers/:id/reject`, `PATCH /admin/service-categories/:id/duration` |
 | Dev only | `PUT/GET /dev-storage/:bucket/*key` (signed; 404 when S3 is configured; refused in production) |
 | Socket.IO | namespace `/realtime`: `job:watch`, `job:unwatch`, `location:update` in (the last only for your own job on the way); events out are listed in `03-api-spec.md §9.6, §10.7, §11.5` |
 
 ### 3.2 Specified in `docs/03-api-spec.md` but **not built**
 - `POST /jobs/:id/payment/confirm` (the worker confirms receipt; P3, no UI), `PATCH /admin/sos/:id` and the `sos.acknowledged` event (nobody can acknowledge an alert in the system yet; the desk acts outside it), PDF receipts (JSON only).
-- Reviews and tips (`POST /jobs/:id/review`), `GET /workers/me/earnings`, `GET /me/savings` (Phase 6); `GET /config`; push notifications for offline users; `DELETE /me`; `Idempotency-Key`; free-text search `q`.
+- `GET /config`; push notifications for offline users; `DELETE /me`; `Idempotency-Key`; free-text search `q`. **Phase 6 routes are built** (reviews, earnings, savings). Not built within Phase 6: editing or deleting a review, admin moderation of reviews, a worker-side list of their own reviews, tips in earnings.
 - Rescheduling an existing booking; routing-based travel times; showing the per-service default duration to the app.
 
 ### 3.3 Quality gates (run 2026-10-11)
@@ -179,16 +188,16 @@ See `docs/01-requirements.md` FR-SCHEDULING and `03-api-spec.md §10`: booking w
 |---|---|
 | `npm run lint` (oxlint) | 0 warnings, 0 errors |
 | `npm run typecheck` | clean |
-| `npm test` (unit) | **221 / 221** pass, 25 files (was 198) |
-| `npm run test:e2e` (real PostgreSQL `KaamConnect_test`, real WebSockets) | **534 / 534** pass, 19 files (was 473; +27 in `phase5-requirements.e2e-spec.ts`, which began as 22 `todo` and has none left, +34 in `fulfilment.e2e-spec.ts`) |
+| `npm test` (unit) | **236 / 236** pass, 28 files (was 221 / 25) |
+| `npm run test:e2e` (real PostgreSQL `KaamConnect_test`, real WebSockets) | **579 / 579** pass, 21 files (was 534 / 19: +16 in `arrival-code-reset.e2e-spec.ts`, +6 in `db-constraints.e2e-spec.ts`, +23 in `phase6.e2e-spec.ts`) |
 | `npm run test:perf` (5,000 workers, 50,000 jobs) | 7 / 7 pass **functionally**. The idle-machine comparison is still **pending** (§3.4) |
 | `npm run build` | clean |
 | `npm audit --omit=dev` | 0 vulnerabilities |
 | `npm audit` (incl. dev) | 4 high, all dev-only (`deepmerge-ts`, `mysql2` pulled in by the Prisma CLI) |
 | Drift check, migrated **test** database vs `schema.prisma` (`prisma migrate diff`) | **no difference** (the new exclusion constraint, partial indexes and CHECKs are invisible to Prisma, as before) |
 | Mutation check of the new tests | I broke the code on purpose in six ways and ran the matching tests: back-out not resetting the lead guard, back-out leaving the booking window, completion not freeing the worker, completion ignoring job ownership, worker routes demanding verification again, a backed-out worker able to quote again | **all six were caught** (each by the intended test); the code was restored and re-checked |
-| `prisma migrate status` and drift check on **dev** `KaamConnect` | **up to date (3 migrations), no drift** (verified 2026-10-11 after applying; also confirmed `btree_gist` 1.8 installed, all new constraints, indexes and enum values present, reference data unchanged at 8/3/13, 0 users, 0 jobs) |
-| `bash scripts/smoke.sh` on the built app against the dev DB | **passed 2026-10-11** with the script extended through Phase 5: login -> live lead -> quote -> accept -> wrong code refused -> arrive -> bill -> stale approval refused -> approve -> finish -> pay -> receipt -> COMPLETED. Its users, job and payment were removed afterwards; dev is back to 0 users / 0 jobs |
+| `prisma migrate status` and drift check on **dev** `KaamConnect` | **4 migrations applied, up to date, no drift** (2026-10-11, after applying `arrival_code_reset` and again after the smoke test); the new objects exist as written; reference data unchanged (8 / 3 / 13); 0 users, 0 jobs |
+| `bash scripts/smoke.sh` on the built app against the dev DB | **passed 2026-10-11 on the migrated database** with the script extended through Phase 6: login -> live lead -> quote -> accept -> wrong code refused -> **customer issues a new code, second reset throttled, old code refused** -> arrive with the new code -> bill -> stale approval refused -> approve -> finish -> pay -> receipt -> COMPLETED -> **review (second refused), worker profile shows it, earnings, commission saved**. The database then showed the `ARRIVAL_CODE_RESET` and `ARRIVAL_RESET_REFUSED` audit rows with the customer as actor and the IP recorded. Its data was removed afterwards (§0.3) |
 
 E2E tests by file: scheduling 64, workers 61, leads-offers 47, customers 44, jobs 41, auth 38, **fulfilment 34**, media 32, **phase5-requirements 27**, direct-booking 27, realtime 24, discovery 23, admin 21, db-constraints 16, marketplace-realtime 13, app 8, catalog 6, seed 5, timestamps 3.
 Code coverage has **not** been measured and no coverage gate exists.
@@ -217,13 +226,13 @@ No endpoint is anywhere near its budget. The original baseline was a single run,
 ### 3.5 Databases
 | | `KaamConnect` (dev) | `KaamConnect_test` |
 |---|---|---|
-| Schema | **3 migrations applied** (baseline, `scheduling_and_availability`, `category_default_duration`), 20 tables + `_prisma_migrations`; applied 2026-10-11 with `npm run db:migrate` after a verified backup (see below) | same (applied automatically by the e2e global setup) |
+| Schema | **4 migrations applied** (baseline, `scheduling_and_availability`, `category_default_duration`, `arrival_code_reset`), 21 tables + `_prisma_migrations`; the fourth applied 2026-10-11 after a verified backup | **4 applied**, 21 tables; no drift against `schema.prisma` (checked 2026-10-11) |
 | Data | (no Phase 5 migration; the schema is unchanged) 8 categories, 3 cities, 13 areas, **0 users, 0 jobs**; **0 areas have coordinates** | emptied and re-seeded on every e2e run; the perf test leaves 5,000 workers + 50,000 jobs until the next e2e run |
 
 ### 3.6 Repository and CI
 - Branch `main`; two commits (**docs and README only**). Remote `origin` = `github.com/ksingh3237/KaamConnectBackendAPI` configured.
-- **Everything from Phases 0–5 is uncommitted** (`src/`, `test/`, `prisma/`, `scripts/`, `package.json`, `.github/`, doc updates). `docs/proposed-schema.prisma` is staged for deletion (duplicate of `prisma/schema.prisma`).
-- **CI (`.github/workflows/ci.yml`) has never run on GitHub, so it is not verified.** Changes made: a step that checks PostgreSQL can provide `btree_gist` (the official `postgres:18` image ships it and `POSTGRES_USER` is a superuser, which is my understanding, not something I could run: there is no Docker here); the smoke test now reaches COMPLETED. What I did verify: the YAML parses (15 steps), and the shell of the new step behaves correctly against local PostgreSQL 18, both when the extension exists (exit 0) and when it does not (exit 1 with the error message).
+- **Everything from Phases 0–5 is committed, pushed and merged into `main`** (PR #1, merge commit `d19c4fb`, 2026-10-11 03:18:55 UTC). `docs/proposed-schema.prisma` was deleted in the docs commit (duplicate of `prisma/schema.prisma`).
+- **CI (`.github/workflows/ci.yml`) ran on GitHub twice and passed both times:** run 38086756115 (pull request, commit `fd3f6ce`, 17 steps) and run 38107978974 (push to `main`, merge commit `d19c4fb`, 21 steps). It includes the `btree_gist` availability step, which passed. Neither run covered the arrival-recovery or Phase 6 work.
 - `.env` and `.local-storage/` are git-ignored. Your `.env` has `WORKER_VERIFICATION_MODE=auto` (so the smoke script works locally); it lacks the newer optional keys (defaults apply).
 
 ---
@@ -236,8 +245,8 @@ No endpoint is anywhere near its budget. The original baseline was a single run,
 ### 4.2 Known limitations and risks (verified)
 | # | Item | Impact | Action |
 |---|---|---|---|
-| K-1 | Phases 0–4 are uncommitted and unpushed | A disk problem loses all the work | Your call when to commit/push; I do not commit unless asked |
-| K-2 | CI workflow has never run on GitHub. It changed again in Phase 4 (adds `WORKER_VERIFICATION_MODE=auto`, a heavier smoke script that needs the `socket.io-client` dev dependency) | May fail for environment reasons | Push to a branch and read the first run |
+| ~~K-1~~ | **Resolved 2026-10-11:** Phases 0–5 are committed, pushed and merged into `main` (PR #1) | – | – |
+| ~~K-2~~ | **Resolved 2026-10-11:** the CI workflow ran on GitHub and succeeded (run 38086756115) | – | – |
 | K-3 | `S3StorageService` has never talked to a real bucket | Production uploads unproven (unit tests prove the signature covers type and size) | Needs an AWS bucket (Q-15, Q-21) |
 | K-4 | Area centroids are null | Matching uses the same-city fallback: a worker with a 3 km radius still gets every job in their city, and `distanceKm` is `null` everywhere. The radius rule is built and tested but dormant | Q-18 |
 | K-5 | Access tokens cannot be revoked for 15 min; the JWT guard does not hit the DB | A disabled user keeps access until next refresh | Accepted for v1 |
@@ -255,11 +264,15 @@ No endpoint is anywhere near its budget. The original baseline was a single run,
 | ~~K-21~~ | **Resolved 2026-10-11.** The scheduling migrations were applied to the dev database after a backup. **Backup:** `KaamConnect-before-scheduling-2026-10-11.dump` in a `KaamConnect-db-backups` folder next to the repositories on the dev machine (pg_dump custom format, 20 tables, verified readable with `pg_restore --list`; stored outside both repositories). **Restore if ever needed:** drop and recreate `KaamConnect`, then `pg_restore -d KaamConnect <file>`. **Irreversible parts, for the record:** adding the `SCHEDULED` value to the `JobTiming` enum cannot be undone in PostgreSQL without rebuilding the type, and the `btree_gist` extension stays installed. Nothing was dropped or deleted; the only data statement is a back-fill that touched 0 rows (no jobs existed) | – | – |
 | ~~K-22~~ | **Resolved in Phase 5** for everything the scheduling work depended on: arrival, completion, payment, tracking and SOS now exist; `workerFreed` is called at completion, back-out and customer cancel; back-out clears the booking and re-notifies workers; routes are gated by ownership. Each is covered by a test in `phase5-requirements.e2e-spec.ts`. **Still app-dependent:** the refresh only helps if the phone answers `location.refresh` with a fix and the person allowed location | – | – |
 | **K-26** | Distances and ETAs in tracking are `null` until real coordinates exist: the 13 areas have none (Q-18) and the customer app does not yet send GPS with the address. Tracking says so (`distanceBasis: null`) instead of guessing | The map screen shows the worker's dot but no "1.1 km away" until Q-18 is done | Q-18 |
-| **K-27** | Five wrong arrival codes lock the job for that assignment, with no unlock path other than the worker backing out or the customer cancelling | A worker who mistypes can be stuck; a customer who misreads the code too | Product decision: add a customer-side "resend/reset code" if wanted |
+| ~~K-27~~ | **Resolved (built) 2026-10-11:** a customer can issue a new arrival code (3 per assignment, 60 s apart; audited). Remaining consequence: after the third reset only cancel / back-out free a locked job. The dev migration is applied and verified | – | – |
 | **K-28** | SOS: the alert is stored and sent to one webhook (5 s timeout, no retry). No acknowledge/resolve endpoint and no `sos.acknowledged` event. **Production now refuses to boot without `SOS_WEBHOOK_URL`** (https), like the other safety guards | An unreachable desk is only visible in the logs; alerts stay `OPEN` forever | Phase 7: retry/queue + admin acknowledge; set `SOS_WEBHOOK_URL` before launch |
 | **K-29** | Payment is the customer's own statement; the platform neither moves nor verifies money (BR-2). The worker-confirm path (`POST /jobs/:id/payment/confirm`) is not built | A dishonest "Paid" is possible | R-7; add the confirm path if disputes appear |
 | **K-30** | `GET /workers/me/jobs` lists unanswered quotes (`pendingQuotes`) outside the paging, capped at 50 | A worker with more than 50 waiting quotes sees the 50 newest | Fine for launch |
-| **K-31** | The CI workflow is unverified (see §3.6) and the `btree_gist` assumption is untested on GitHub | The first run could fail for an environment reason | Push to a branch and read the first run; do not treat CI as passing until then |
+| ~~K-31~~ | **Resolved 2026-10-11:** the CI run passed, including the `btree_gist` step | – | – |
+| **K-32** | A review is final: no edit, delete or admin moderation; no free-text comment exists | A mistaken or abusive rating cannot be removed through the API | Add an admin removal route if it becomes a problem (it would also need to adjust the worker's totals) |
+| **K-33** | Earnings are attributed to the time the payment was recorded (`completed_at`), and "paid" is the customer's own statement (K-29) | A dishonest "Paid" counts as earned | Same as K-29 |
+| **K-34** | "Commission saved" is a comparison with a competitor rate (default 20 %), not money the platform holds | Misleading if shown without the rate | The API returns `benchmarkRate`; the app must disclose it (D-5) |
+| **K-35** | The arrival-reset audit table has no read endpoint and the lock event is best-effort (a failed audit write is logged, not retried) | Support must query the database | Add an admin read route in Phase 7 |
 | **K-23** | Straight-line travel times; and no service has its own job length yet (D-14 support is built but the numbers are empty) | A long job (AC installation) can be booked over by a short one; short jobs block more than needed | Supply minutes per service (`defaultDurationMin` in `prisma/data/service-categories.ts`, then re-run the seed), A-18 |
 | **K-24** | Location catch-up remembers where it last matched each worker in memory, per instance; at most one look per worker per minute | After a job ends, new nearby leads can take up to a minute to arrive; with several instances a worker may be looked at more often (harmless: the delivery guard prevents duplicates) | Fine for launch; move the mark into the Redis seam (D-6) if needed |
 | ~~K-25~~ | Quote-time availability is a hard check. **Approved as D-12 (2026-10-11).** | – | – |
@@ -338,7 +351,7 @@ Answered by you: Q-1, 2, 3, 7, 9, 13 and the real-time/Redis question (D-1…D-7
 | Q-4 | Lead `budget` / "Within 1 Hour" | lead cards show the category `baseVisitFee`; "Within 1 Hour" dropped (**now implemented**) | nothing |
 | Q-5 | Worker backs out after assignment: re-open the job? | yes, re-open and notify. **Built on this default** (you asked for the documented requirements; it was not separately confirmed) | nothing now |
 | Q-6 | Worker visiting-fee field | optional field (built; used by direct booking and cards) | nothing |
-| Q-8 | Tips | record-only | Phase 6 |
+| Q-8 | Tips | record-only (**built**: `tipAmount` is stored on the review, never added to a payment or to earnings) | nothing |
 | Q-10 | SOS recipient / emergency contact | a webhook you configure (`SOS_WEBHOOK_URL`). **Built on this default**, not separately confirmed. No emergency-contact field exists | You must set the webhook before production |
 | Q-11 | 13 vs 19 areas | 13 built, 6 behind a flag | nothing |
 | Q-12 | `[6-9]` mobile prefix | yes (built) | nothing |
@@ -381,18 +394,17 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 
 ## 8. Exact next task and recommended next steps
 
-**Phase 6 (reviews, activity extras, earnings, savings; tips are record-only per the default for Q-8) has NOT started.** It needs your explicit "go ahead with phase 6".
+**Phase 6 is built and tested locally** (2026-10-11, after your explicit go-ahead). **Its CI result is on the new pull request**; this report does not claim it passes.
 
-**Hard blockers for starting Phase 6:** none technical. Phase 6 builds on completed jobs, which exist and are tested.
+**Open, in the order I suggest:**
+1. ~~Docs commit (the CI-result edit only)~~ **Done:** commit `6665ea0` was pushed to `feature/backend-phases-0-5` after PR #1 had already been merged, so it reaches `main` only through the new pull request.
+2. ~~Review and apply the migration to dev~~ **Done 2026-10-11** (backup, `migrate deploy`, status, drift, extended smoke test; §0.2, §0.3).
+3. ~~Commit and push the new work~~ **Approved and done as five commits on `feature/phase-6-and-arrival-recovery`; the new PR is #2 into `main` (open, not merged).** A sixth commit followed the code review (documentation corrections, a schema comment and 11 more tests). **Next: read that PR's CI run, and do not merge it without your approval.**
+4. **Benchmark on an idle machine** three times against the baseline in §0.6.
+5. **SOS:** name a receiver and a 24/7 monitoring person, then approve the delivery design; nothing is enabled until then.
+6. **Supply per-service minutes** (90 stays the default) and **verified area coordinates** (13 pending; none invented).
 
-**Strongly recommended first, in this order:**
-1. **Commit and push.** Everything since the first commit exists only locally (§0.5). Say the word and I will commit in sensible pieces and push; I have not, because nothing here may be committed without you asking. The workflow file travels with it.
-2. **Read the first GitHub Actions run.** Until it runs and passes, CI is unverified (K-31). If the `btree_gist` check step fails, its message says what to change. Do not treat CI as passing before then.
-3. **Re-run the benchmark on an idle machine** three times and compare with the baseline in §0.6.
-4. **Decide the two open questions** in §0.4 (arrival-code recovery; SOS webhook and who watches it).
-5. **Supply per-service minutes** and **verified area coordinates** (§0.7).
-
-**Approved work still to do, which I can schedule with or before Phase 6 if you wish:** D-8 (name/photo change re-opens review: a small change in `workers.service.ts` plus tests) and D-9 (Aadhaar deletion job, Phase 7, probably one small migration, which I would ask about first).
+**Approved earlier but still not built:** D-8 (name/photo change re-opens review) and D-9 (Aadhaar deletion, probably one small migration, which I would ask about first).
 
 **Phase 7 carry-overs:** SOS retry/acknowledge, worker payment confirmation if disputes appear, IDOR matrix extension (an access matrix for the 11 new routes already exists in `fulfilment.e2e-spec.ts`), a nightly run of the contention tests, the first real S3 test, MSG91, the legal items.
 
@@ -404,9 +416,9 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 
 | What | Command / source | Result |
 |---|---|---|
-| Source layout and routes | `find src`, grep of route decorators in `*.controller.ts` | 60 handlers (was 45 after Phase 4; the count in this row is from 2026-10-11); `jobs`, `offers`, `matching`, `realtime` modules exist; no bill / payment / tracking code |
+| Source layout and routes | `find src`, grep of route decorators in `*.controller.ts` | 64 handlers (was 60 after Phase 5, 45 after Phase 4); `jobs`, `offers`, `matching`, `realtime` modules exist; no bill / payment / tracking code |
 | Quality gates | `npm run lint`, `typecheck`, `test`, `test:e2e`, `test:perf`, `build`, `npm audit` | see §3.3 |
-| Test counts | `npm test`, `npm run test:e2e` | unit 221 (25 files), e2e 534 (19 files); a baseline before Phase 5 was 198 + 473 |
+| Test counts | `npm test`, `npm run test:e2e` | unit 236 (28 files), e2e 579 (21 files); before Phase 6: 221 + 534; before Phase 5: 198 + 473 |
 | Migration and drift | `prisma migrate status`, `prisma migrate diff --exit-code` | up to date, no drift, no new migration |
 | Dev data | row counts | 0 users, 0 jobs, 0 offers; 8/3/13 reference rows; 0 areas with coordinates |
 | End-to-end on the built app | `bash scripts/smoke.sh` against the dev DB, then cleanup | passed; DB back to 0 users / 0 jobs |
@@ -421,9 +433,16 @@ Frontend gaps recorded (G-14…G-19): "Book Pro" waiting state, worker "under re
 | Dev database migration (2026-10-11) | read-only check of the connection (host localhost, database `KaamConnect`, `NODE_ENV=development`, 0 users / 0 jobs), `pg_dump` + `pg_restore --list`, scan of the SQL for DROP/DELETE/TRUNCATE (only `ON DELETE CASCADE` on the new table), `npm run db:migrate`, then `migrate status`, `migrate diff` and catalog queries | applied cleanly; up to date, no drift, extension and constraints present |
 | Smoke test on the migrated dev DB | `npm run build`, `bash scripts/smoke.sh`, then removal of its users and job | passed; dev back to 0 users / 0 jobs |
 | Performance | `npm run test:perf` ×3 on the quieter machine, plus temporary profiling tests (removed) | §3.4 |
-| Not verified | CI on GitHub (never run), performance on a truly idle machine, `btree_gist` creation by a non-superuser role on RDS | see K-2, §3.4, `02-database.md §5` |
+| Not verified | Performance on a truly idle machine, `btree_gist` creation by a non-superuser role on RDS (CI is now verified, see the next row) | see §3.4, `02-database.md §5` |
 | Phase 5 first run | wrote the real suite, ran it | 25 of 27 passed; the 2 failures were mistakes in my test set-up (a worker cannot take two overlapping immediate jobs, which is the scheduling rule working), fixed; then 27 + 34 pass |
 | Phase 5 CI step | parsed the workflow with js-yaml; ran the step's shell against local PostgreSQL 18 with the extension present and with it renamed to a missing one | exit 0 and exit 1 with the intended message. **GitHub itself has not run it** |
-| Not verified | CI on GitHub, performance on an idle machine, `btree_gist` creation by a non-superuser role on RDS, `SOS_WEBHOOK_URL` against a real receiver (the webhook client is unit-tested against a mocked `fetch`) | §3.4, §3.6, K-28, K-31 |
-| Final re-verification (2026-10-11, end of session) | `git status/log/ls-remote`; public GitHub Actions API; `prisma migrate status` + `migrate diff` on dev and test; read-only SQL on both databases; grep of controllers and tests; `tsc`, `oxlint`, Prettier, `npm test`, `npm run test:e2e`, `npm run build`, `npm audit --omit=dev` | §0: 221 unit and 534 e2e pass with none skipped; no drift; 0 workflow runs; remote = docs-only commit |
+| CI runs (2026-10-11) | GitHub API: `/actions/runs` and `/actions/runs/<id>/jobs` for both runs | run 38086756115 (PR #1, `fd3f6ce`, 17/17 steps) and run 38107978974 (push to `main`, `d19c4fb`, 21 steps, none unsuccessful): both conclusion success (§0.5) |
+| Git state check (2026-10-11) | `git ls-remote`, `git fetch`, `git log origin/main`, the pulls API | PR #1 merged 03:18:55 UTC (merge commit `d19c4fb`); `origin/main` differs from `feature/backend-phases-0-5` only by docs commit `6665ea0` |
+| Not verified | Performance on an idle machine, `btree_gist` creation by a non-superuser role on RDS, `SOS_WEBHOOK_URL` against a real receiver (the webhook client is unit-tested against a mocked `fetch`) | §3.4, K-28 |
+| Re-verification at the end of Phase 5 (2026-10-11; superseded by the rows below) | `git status/log/ls-remote`; public GitHub Actions API; `prisma migrate status` + `migrate diff` on dev and test; read-only SQL on both databases; grep of controllers and tests; `tsc`, `oxlint`, Prettier, `npm test`, `npm run test:e2e`, `npm run build`, `npm audit --omit=dev` | §0: 221 unit and 534 e2e pass with none skipped; no drift; 0 workflow runs; remote = docs-only commit |
 | Corrected | I had written "2026-10-12" for the Phase 5 work; the system date is 2026-10-11, so every such date in the docs was corrected | – |
+
+| Arrival-code recovery and Phase 6 (2026-10-11) | `npm run typecheck`, `lint`, `prettier --check`, `npm test`, `npm run test:e2e` (full, re-run after the branch was created), `npm run build`, `npm audit --omit=dev`, `prisma migrate diff` against the migrated test database | all clean: 236 unit, 579 e2e (after the review follow-up), 0 vulnerabilities, no drift on test |
+| Dev migration and smoke test (2026-10-11) | read-only check of the connection (host, database name, `NODE_ENV`, 3 migrations, 0 users and 0 jobs); `pg_dump` custom format, then `pg_restore --list`; `npm run db:migrate`; `migrate status`, `migrate diff`, catalog queries; `npm run build`; `bash scripts/smoke.sh`; row counts of every table before and after; one transaction removing only the smoke data, committed only if counts equalled the snapshot | backup 63,124 bytes and readable; migration applied cleanly; up to date, no drift; smoke test passed; cleanup matched the snapshot (reference data only) |
+| Mutation checks (2026-10-11) | broke the code on purpose and ran the matching tests: reset cap, cooldown, ownership; review ownership, rating totals, IST offset, COMPLETED filters (earnings, savings) | all caught; two survived at first because the fixtures never exercised the filter, fixtures were strengthened, then caught; every file restored Follow-up: 4 e2e mutations, 2 unit mutations and 3 test-database constraint mutations, all caught and all restored. |
+| Not verified (2026-10-11) | CI on the new work (including the extended smoke script), performance on an idle machine, real SOS delivery, real S3, `btree_gist` as a non-superuser on RDS | pending, see §0 |
