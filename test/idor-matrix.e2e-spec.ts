@@ -38,6 +38,8 @@ interface Ids {
   direct: string; // A's direct booking, waiting for Z
   address: string; // A's address
   worker: string; // a worker profile an admin could verify
+  sos: string; // an SOS alert A raised on `assigned`
+  requester: string; // a disabled user who asked for deletion (waits for an admin)
   category: string;
 }
 
@@ -121,6 +123,15 @@ const CASES: Case[] = [
     path: job('/sos'),
     body: {},
     ...ANYONE_JOB_ROUTE,
+  },
+
+  // The caller's own alerts on a job they are on; anyone else gets the same 404 as for an unknown job.
+  {
+    route: 'GET /jobs/:id/sos',
+    resource: 'assigned',
+    path: job('/sos'),
+    ...ANYONE_JOB_ROUTE,
+    owners: ['A', 'W'],
   },
 
   // ── the job's customer ──
@@ -313,6 +324,38 @@ const CASES: Case[] = [
     strangers: ['A', 'B', 'W', 'X', 'Z'],
     wrongRole: [],
   },
+  {
+    route: 'POST /admin/sos/:id/acknowledge',
+    resource: 'sos',
+    path: (_ids, id) => `${V1}/admin/sos/${id}/acknowledge`,
+    body: {},
+    strangers: ['A', 'B', 'W', 'X', 'Z'],
+    wrongRole: [],
+  },
+  {
+    route: 'POST /admin/sos/:id/resolve',
+    resource: 'sos',
+    path: (_ids, id) => `${V1}/admin/sos/${id}/resolve`,
+    body: {},
+    strangers: ['A', 'B', 'W', 'X', 'Z'],
+    wrongRole: [],
+  },
+  {
+    route: 'POST /admin/deletion-requests/:userId/approve',
+    resource: 'requester',
+    path: (_ids, id) => `${V1}/admin/deletion-requests/${id}/approve`,
+    body: {},
+    strangers: ['A', 'B', 'W', 'X', 'Z'],
+    wrongRole: [],
+  },
+  {
+    route: 'POST /admin/deletion-requests/:userId/decline',
+    resource: 'requester',
+    path: (_ids, id) => `${V1}/admin/deletion-requests/${id}/decline`,
+    body: {},
+    strangers: ['A', 'B', 'W', 'X', 'Z'],
+    wrongRole: [],
+  },
 ];
 
 /** Routes with a path parameter that are not owner-scoped objects, and why they are not in the matrix. */
@@ -432,7 +475,20 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       )
       .expect(201);
 
+    // A raised an SOS on the assigned job (stored directly: raising one over HTTP is covered by the SOS suites)
+    const alert = await t.prisma.sosAlert.create({
+      data: { userId: A.userId, jobId: made.job.id },
+    });
+    // a disabled person who asked for deletion, waiting for an admin
+    const requester = await loginAs(t, nextPhone());
+    await t.prisma.user.update({
+      where: { id: requester.userId },
+      data: { isActive: false, deletionRequestedAt: new Date() },
+    });
+
     ids = {
+      sos: alert.id,
+      requester: requester.userId,
       assigned: made.job.id,
       open: open.id,
       offerOnOpen: quote.id,
@@ -503,7 +559,7 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       unclassified: [...registered].filter((r) => !classified.has(r)).sort(),
       stale: [...classified].filter((r) => !registered.has(r)).sort(),
     }).toEqual({ unclassified: [], stale: [] });
-    expect(registered.size).toBe(34);
+    expect(registered.size).toBe(39);
   });
 
   describe.each(CASES)('$route', (c) => {

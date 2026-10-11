@@ -7,7 +7,7 @@ touched. Each section ends with the exact questions I need answered before build
 
 ## 1. `DELETE /me`: account deletion by anonymisation (Q-17), final design for approval
 
-Status: **design v2, incorporating your decisions; not implemented.** I will not start until you approve it.
+Status: **implemented locally on 2026-10-12 (see docs/12 for what was built, the deviations and the tests); not deployed, not applied anywhere except the local databases.** The design text below is kept as written.
 
 **Your decisions, as built into this design:** the person re-confirms with an OTP; an admin cannot delete their own
 account; deletion is refused while the user has an active job; a disabled user may ask for deletion only after safe
