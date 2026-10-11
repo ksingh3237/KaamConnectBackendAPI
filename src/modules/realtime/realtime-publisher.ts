@@ -14,4 +14,12 @@ export abstract class RealtimePublisher {
 
   /** To everyone currently watching one job (see the `job:watch` message). */
   abstract toJob(jobId: string, event: string, payload: unknown): void;
+
+  /**
+   * Closes every connection of one user (account deletion). The default does nothing, which is right for
+   * transports with no connections; the Socket.IO gateway overrides it.
+   */
+  disconnectUser(userId: string): void {
+    void userId;
+  }
 }

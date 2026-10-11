@@ -29,6 +29,6 @@ import { TokenService } from './token.service.js';
     otpSenderProvider,
   ],
   // JwtAuthGuard is registered globally from AppModule (after the throttler guard).
-  exports: [JwtAuthGuard, TokenService],
+  exports: [JwtAuthGuard, TokenService, OtpService],
 })
 export class AuthModule {}

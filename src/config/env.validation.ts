@@ -203,6 +203,14 @@ export class EnvVars {
   @IsString()
   CORS_ORIGINS?: string;
 
+  // File the account-deletion ledger is appended to (one JSON line per deletion: user id and time, nothing else).
+  // The ledger must live OUTSIDE the database and be kept with the backups, so a restore can re-apply deletions
+  // (docs/08 section 1.5). Unset = deletions are only written to the application log (fine for local development).
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsString()
+  DELETION_LEDGER_FILE?: string;
+
   // --- Business configuration ---
   @Transform(toNumber)
   @IsInt()
