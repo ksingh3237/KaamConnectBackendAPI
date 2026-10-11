@@ -75,12 +75,18 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Both suites run once, with coverage switched on (the reports go to coverage/unit and coverage/e2e).
       - name: Unit tests
-        run: npm test
+        run: npm run test:cov:unit
 
       # globalSetup applies migrations to the *_test database before the suites run.
       - name: E2E tests (real PostgreSQL)
-        run: npm run test:e2e
+        run: npm run test:cov:e2e
+
+      # Merges the two reports and fails the build below the documented thresholds: 85 % of lines in auth, jobs,
+      # offers and reviews, 70 % overall, and 70 % of branches overall (docs/05-security-testing.md).
+      - name: Coverage thresholds
+        run: npm run coverage:check
 
       - name: Build
         run: npm run build
