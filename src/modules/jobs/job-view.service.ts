@@ -24,8 +24,12 @@ import {
 } from '../workers/worker-card.service.js';
 import type { LeadPayload } from '../realtime/events.js';
 
-/** Everything the job screens need, loaded in one query. */
-export const jobInclude = {
+/**
+ * Everything the job screens need EXCEPT the number of quotes. For one job the quote count is cheap
+ * (`jobInclude` below); for a list, fetch the page without it and count only the page's jobs with
+ * `visibleOfferCounts` (see offers/visible-offers.ts for why).
+ */
+export const jobBaseInclude = {
   area: { include: { city: true } },
   category: {
     select: {
@@ -44,6 +48,11 @@ export const jobInclude = {
     },
   },
   media: { orderBy: { createdAt: 'asc' } },
+} satisfies Prisma.JobInclude;
+
+/** Everything the job screens need, loaded in one query, including how many quotes the customer can see. */
+export const jobInclude = {
+  ...jobBaseInclude,
   _count: {
     select: {
       offers: { where: VISIBLE_TO_CUSTOMER },
