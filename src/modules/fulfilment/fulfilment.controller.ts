@@ -3,18 +3,21 @@ import {
   Controller,
   Get,
   HttpCode,
+  Ip,
   Param,
   ParseUUIDPipe,
   Post,
   Put,
   Query,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   CurrentUser,
   type AuthenticatedUser,
 } from '../../common/decorators/current-user.decorator.js';
 import { RequireProfile } from '../../common/decorators/require-profile.decorator.js';
 import type { JobView } from '../jobs/job-view.service.js';
+import { ArrivalCodeResetService } from './arrival-code-reset.service.js';
 import { ArrivalService } from './arrival.service.js';
 import { BillService, type BillView } from './bill.service.js';
 import { CompletionService } from './completion.service.js';
@@ -50,6 +53,7 @@ import {
 export class FulfilmentController {
   constructor(
     private readonly arrival: ArrivalService,
+    private readonly arrivalReset: ArrivalCodeResetService,
     private readonly bill: BillService,
     private readonly completion: CompletionService,
     private readonly payment: PaymentService,
@@ -65,8 +69,9 @@ export class FulfilmentController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArrivalDto,
+    @Ip() ip: string | undefined,
   ): Promise<JobView> {
-    return this.arrival.arrive(user.id, id, dto.code);
+    return this.arrival.arrive(user.id, id, dto.code, ip);
   }
 
   @RequireProfile('worker')
@@ -100,6 +105,23 @@ export class FulfilmentController {
   }
 
   // --- Customer side ---
+
+  /**
+   * A new arrival code (the old one stops working, the wrong-try counter restarts). Capped at 3 per job
+   * with a 60-second cooldown, enforced in the database update itself; the per-address limit below is a
+   * second, coarser backstop. Every use and every refusal is audited.
+   */
+  @RequireProfile('customer')
+  @Throttle({ default: { limit: 20, ttl: 60 * 60 * 1000 } })
+  @Post('arrival-code/reset')
+  @HttpCode(200)
+  resetArrivalCode(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Ip() ip: string | undefined,
+  ): Promise<JobView> {
+    return this.arrivalReset.reset(user.id, id, ip);
+  }
 
   @RequireProfile('customer')
   @Post('bill/approve')

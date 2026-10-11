@@ -74,6 +74,8 @@ export class WorkerBackOutService {
               assignedAt: null,
               arrivalCode: null,
               arrivalAttempts: 0,
+              arrivalCodeResets: 0,
+              arrivalCodeResetAt: null,
               bookedStartAt: null,
               bookedEndAt: null,
               bookingConfirmedAt: null,
