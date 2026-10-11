@@ -1,4 +1,4 @@
-import type { Prisma } from '../../generated/prisma/client.js';
+import type { Prisma, PrismaClient } from '../../generated/prisma/client.js';
 import {
   OfferStatus,
   VerificationStatus,
@@ -27,3 +27,27 @@ export const VISIBLE_TO_CUSTOMER = {
     },
   ],
 } satisfies Prisma.OfferWhereInput;
+
+/**
+ * How many quotes a customer can see on each of `jobIds`, by the same rule as above. Jobs with none are absent
+ * from the map (read it with `?? 0`).
+ *
+ * Why this exists: asking Prisma for `_count: { offers: { where: VISIBLE_TO_CUSTOMER } }` while loading MANY jobs
+ * makes PostgreSQL count the visible quotes of the ENTIRE `offers` table and join the result, because a filter
+ * that reaches into `worker_profiles` cannot be pushed down per job. Measured with 100k quotes: 64 ms for a
+ * 21-row page of a customer with 2,000 jobs, 50 ms for the 500-candidate lead feed, against under 1 ms when only
+ * the page's own job ids are counted, through the `(job_id, worker_id)` index. For ONE job the join is already
+ * fast (0.1 ms), so single-job reads keep using `_count`.
+ */
+export async function visibleOfferCounts(
+  prisma: Pick<PrismaClient, 'offer'>,
+  jobIds: readonly string[],
+): Promise<Map<string, number>> {
+  if (jobIds.length === 0) return new Map();
+  const grouped = await prisma.offer.groupBy({
+    by: ['jobId'],
+    where: { jobId: { in: [...jobIds] }, ...VISIBLE_TO_CUSTOMER },
+    _count: { _all: true },
+  });
+  return new Map(grouped.map((g) => [g.jobId, g._count._all]));
+}

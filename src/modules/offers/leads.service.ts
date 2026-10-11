@@ -10,7 +10,7 @@ import {
   LeadResponse,
 } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { jobInclude, referenceOf } from '../jobs/job-view.service.js';
+import { jobBaseInclude, referenceOf } from '../jobs/job-view.service.js';
 import {
   coverageOf,
   spotOfJob,
@@ -25,6 +25,7 @@ import {
 } from '../scheduling/availability.service.js';
 import type { LeadsQueryDto } from './dto/offer.dto.js';
 import { toOfferSummary, type OfferSummary } from './offer-views.js';
+import { visibleOfferCounts } from './visible-offers.js';
 
 const DEFAULT_LIMIT = 20;
 /** Newest open jobs of the worker's trades considered per request (launch scale: one metro). */
@@ -32,7 +33,9 @@ const CANDIDATE_CAP = 500;
 
 const leadInclude = (workerId: string) =>
   ({
-    ...jobInclude,
+    // No quote count here: up to 500 candidates are loaded and most are discarded, so the count is taken
+    // afterwards for the page only (visibleOfferCounts).
+    ...jobBaseInclude,
     // The worker's own quote on each lead (at most one: quotes are unique per job and worker).
     offers: { where: { workerId }, take: 1 },
     // What this worker has already done with the lead (accepted / declined).
@@ -144,9 +147,19 @@ export class LeadsService {
         id: v.row.id,
       }),
     );
+    const offerCounts = await visibleOfferCounts(
+      this.prisma,
+      page.items.map((v) => v.row.id),
+    );
     return {
       items: page.items.map((v) =>
-        this.toItem(v.row, v.distanceKm, v.extended, slots),
+        this.toItem(
+          v.row,
+          v.distanceKm,
+          v.extended,
+          slots,
+          offerCounts.get(v.row.id) ?? 0,
+        ),
       ),
       nextCursor: page.nextCursor,
     };
@@ -185,6 +198,7 @@ export class LeadsService {
         c.distanceKm,
         c.extended,
         await this.availability.slotsOf(workerId),
+        (await visibleOfferCounts(this.prisma, [row.id])).get(row.id) ?? 0,
       ),
       status: row.status,
       photoUrls: (
@@ -218,6 +232,7 @@ export class LeadsService {
     distanceKm: number | null,
     extended: boolean,
     slots: Parameters<AvailabilityService['assess']>[0],
+    offersCount: number,
   ): LeadItem {
     const answer = row.workerLeads[0]?.response ?? null;
     return {
@@ -248,7 +263,7 @@ export class LeadsService {
       postedAt: row.createdAt.toISOString(),
       hasVoiceNote: row.media.some((m) => m.kind === JobMediaKind.VOICE_NOTE),
       notes: row.description,
-      offersCount: row._count.offers,
+      offersCount,
       baseVisitFee: row.category.baseVisitFee,
       isDirect: row.targetWorkerId !== null,
       expiresAt: row.expiresAt?.toISOString() ?? null,

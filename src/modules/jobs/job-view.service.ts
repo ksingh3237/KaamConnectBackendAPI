@@ -24,8 +24,12 @@ import {
 } from '../workers/worker-card.service.js';
 import type { LeadPayload } from '../realtime/events.js';
 
-/** Everything the job screens need, loaded in one query. */
-export const jobInclude = {
+/**
+ * Everything the job screens need EXCEPT the number of quotes. For one job the quote count is cheap
+ * (`jobInclude` below); for a list, fetch the page without it and count only the page's jobs with
+ * `visibleOfferCounts` (see offers/visible-offers.ts for why).
+ */
+export const jobBaseInclude = {
   area: { include: { city: true } },
   category: {
     select: {
@@ -44,6 +48,11 @@ export const jobInclude = {
     },
   },
   media: { orderBy: { createdAt: 'asc' } },
+} satisfies Prisma.JobInclude;
+
+/** Everything the job screens need, loaded in one query, including how many quotes the customer can see. */
+export const jobInclude = {
+  ...jobBaseInclude,
   _count: {
     select: {
       offers: { where: VISIBLE_TO_CUSTOMER },
@@ -52,6 +61,11 @@ export const jobInclude = {
 } satisfies Prisma.JobInclude;
 
 export type JobRow = Prisma.JobGetPayload<{ include: typeof jobInclude }>;
+
+/** A job loaded without the quote count (see `jobBaseInclude`). Every `JobRow` is also one of these. */
+export type JobBaseRow = Prisma.JobGetPayload<{
+  include: typeof jobBaseInclude;
+}>;
 
 export interface JobView {
   id: string;
@@ -280,9 +294,10 @@ export class JobViewService {
 
 /** The privacy-safe summary pushed to workers: no address, no phone, no exact location. */
 export function leadPayloadOf(
-  job: JobRow,
+  job: JobBaseRow,
   distanceKm: number | null,
   isDirect: boolean,
+  offersCount: number,
 ): LeadPayload {
   return {
     id: job.id,
@@ -293,7 +308,7 @@ export function leadPayloadOf(
     urgency: job.timing,
     postedAt: job.createdAt.toISOString(),
     hasVoiceNote: job.media.some((m) => m.kind === JobMediaKind.VOICE_NOTE),
-    offersCount: job._count.offers,
+    offersCount,
     isDirect,
     ...(isDirect && job.expiresAt
       ? { expiresAt: job.expiresAt.toISOString() }
