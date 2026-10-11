@@ -153,14 +153,18 @@ Baselines from the same experiment: an **active** user logging out gets 204, the
 | 1 | Heavy-user benchmark with `EXPLAIN` checks (activity, earnings, savings, schedule) | **Committed and pushed** `531a3e6` | `test/perf/marketplace.perf-spec.ts`; 13 perf tests pass |
 | 2 | Quote-count optimisation: customer list and lead feed count visible quotes for the page's jobs only | **Committed and pushed** `f45e03f`. Customer completed list p50/p95 68/134 and 62/164 ms -> 21/24 and 10/14; lead feed 64/201 and 66/174 -> 21/92 and 16/29 (old and new code alternated, two runs each, on a busy laptop) | 6 e2e + 4 unit tests, 3 mutation checks |
 | 3 | The same for lead catch-up (a batch of up to 300 pushed leads) | **Committed and pushed** `8980e6b`. 58 leads claimed and pushed: p50/p95 122/149 and 122/180 ms -> 16/21 and 30/38 | 3 e2e tests, 3 mutation checks. Full suite 309 unit + 733 e2e |
-| 4 | `DELETE /me` by anonymisation | **Final design written, not implemented** (`docs/08` §1): awaiting your answers on Door B, the job title and the migration, and counsel on retention | design only |
-| 5 | D-9 `reviewed_at` / `reviewed_by` migration | **Drafted and tested; applied to the TEST database only.** On the local branch `feature/phase-7-d9-reviewed-at` (`a995d2c`), **not pushed**. Dev and production untouched | 9 tests, 3 mutation checks, rollback SQL validated in a rolled-back transaction; 309 unit + 742 e2e |
-| 6 | Per-user rate limit (additive) | **Built on the local branch `feature/phase-7-per-user-throttling` (`ff8c18d`), not pushed.** Not merged anywhere | 8 unit + 8 e2e, 5 mutation checks; 317 unit + 741 e2e |
-| 7 | OpenAPI export (`@nestjs/swagger`) | **Compatibility report only** (`docs/09` §3); nothing installed | `npm install --dry-run` |
-| 8 | Production checklist, runbook, launch blockers register B-1 to B-13 | **Written** (`docs/09`, `docs/10`) | documents |
+| 4 | `DELETE /me` by anonymisation | **Final design v3 written, not implemented** (`docs/08` §1). Decided by you: OTP reconfirmation, admin self-deletion refused, refused during active jobs, Door B = OTP-verified request that an admin approves, job title cleared to the service name. Retention periods left to counsel. Awaiting your approval of the design as a whole | design only |
+| 5 | D-9 `reviewed_at` / `reviewed_by` migration | **Reviewed with evidence; applied to the TEST database only.** Local branch `feature/phase-7-d9-reviewed-at` (`ed7ccf8`), **not pushed** until you approve. Whole chain applied to an empty schema in 2.8 s with no drift; on 50,000 workers the migration takes about 0.23 s and holds an exclusive lock on `worker_profiles` and a share-row-exclusive lock on `users` until it commits; 0 reviewers invented. Dev and production untouched | `docs/08` §2.10 |
+| 6 | Per-user rate limit (additive) | **Built and reviewed; pushed for CI review (`9567f78`, branch `feature/phase-7-per-user-throttling`); no PR, not merged.** 240 a minute per account, SOS exempt, existing per-IP protections untouched. 317 unit + 741 e2e, 5 mutation checks. It does not help users who share an address | `docs/09` §1.5 |
+| 7 | OpenAPI export (`@nestjs/swagger`) | **Verified in an isolated copy; nothing installed in the repository.** Build with the plugin works, export in 15.7 s with no database, 64 operations, deterministic. Dependency impact: 1 line in `package.json`, 7 dev-only packages, one install script (`@scarf/scarf`); its analytics opt-out was verified with a network-blocking tracer. **Gap: all 64 response bodies are empty objects** | `docs/09` §3 |
+| 7a | Shared-address throttling | **Investigated; no limit changed.** IPv6 clients are grouped by /64; the tightest shared-address limits are on the sensitive routes. Staged proposal in `docs/09` §1.6 (Stage 1 configurable limits at today's values, Stage 2 only after real `429` data). The IPv4 sharing figures are assumptions: there is no production traffic | `docs/09` §1.6 |
+| 8 | Production checklist, runbook, launch blockers register B-1 to B-16 | **Written** (`docs/09`, `docs/10`) | documents |
+| 9 | Pull request plan and checklist | **Written** (`docs/11`): PR order, required checks, migration risks | `docs/11-pr-plan.md` |
 
 CI: none of these branches has had a GitHub run (a push alone does not start the workflow, and no pull request was
-opened). Local results above are not CI results.
+opened). Local results above are not CI results. Branches: `feature/phase-7-milestone-b` (pushed, as reviewed),
+`feature/phase-7-per-user-throttling` (pushed), `feature/phase-7-d9-reviewed-at` (local only) and
+`feature/phase-7-milestone-b-followups` (local only, documents).
 ---
 
 ## 1. Phase status

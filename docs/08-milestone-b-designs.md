@@ -1,11 +1,12 @@
 # 08 · Phase 7, Milestone B: designs awaiting your approval
 
-Status: **proposals only**. Nothing here is implemented, no migration exists under `prisma/`, and no database has been
-touched. Each section ends with the exact questions I need answered before building it.
+Status: **design documents.** Section 1 (`DELETE /me`) is **not implemented** and will not be until you approve this
+final design. Section 2 (D-9) describes a migration that exists on a separate local branch and is applied to the
+**test database only**. No other database has been touched. Each section ends with what I still need from you.
 
 ---
 
-## 1. `DELETE /me`: account deletion by anonymisation (Q-17), final design for approval
+## 1. `DELETE /me`: account deletion by anonymisation (Q-17), final design for approval (v3)
 
 Status: **design v2, incorporating your decisions; not implemented.** I will not start until you approve it.
 
@@ -30,7 +31,8 @@ session proves the device, the code proves control of the phone number, so a sto
 account. The code is checked with the same rules as login (5 wrong tries per code, single use, 5 minutes) but **does
 not create a session**.
 
-**Door B: a disabled account (`POST /auth/deletion-requests`, public, strictly throttled).** A disabled user cannot
+**Door B: a disabled account (`POST /auth/deletion-requests`, public, strictly throttled). Decided by you: OTP proves
+control of the registered number, and an admin must approve.** A disabled user cannot
 hold a session (login and refresh are refused), so the authenticated route cannot work for them. Instead they prove
 control of the number with an OTP and submit `{ "phone", "code" }`. This **records a request** (it does not delete):
 the account was disabled for a reason, possibly an investigation or a safety case, and a code alone (SIM-swap is a
@@ -40,8 +42,15 @@ logged with the admin id). Approval runs the same operation as Door A. The publi
 every phone number (`202`, "if this number belongs to an account, your request has been received"), so it cannot be
 used to find out who has an account. How quickly a request must be answered is a legal question (1.6).
 
-*Alternative for Door B, if you prefer it simpler:* the OTP alone deletes a disabled account at once. I do not
-recommend it, for the reason above, but it removes the admin queue.
+*Considered and rejected:* the OTP alone deleting a disabled account at once. It would let a SIM-swap destroy a flagged
+account's evidence.
+
+**Door B details that follow from the decision.** The request records `users.deletion_requested_at`; an admin sees the
+queue, approves or declines (the decision and the admin id are logged, never the phone number in the clear); a decline
+keeps the account disabled and the request closed. Approval refuses (`409`) if the user has an active job at that moment
+and if the account is an admin account. The person is not told the outcome by SMS until an SMS template for it exists
+(MSG91 is not built), so until then the answer is given through support; that is an open operational point, not a code
+question.
 
 | Case | Answer |
 |---|---|
@@ -86,7 +95,7 @@ addressed to a worker are declined (the customer is told, as for any decline).
 | `worker_documents` (Aadhaar) | objects deleted from the private bucket, then rows | Most sensitive data held. Same deletion code as D-9 |
 | `worker_locations`, `worker_trades`, `worker_leads` | deleted | Location data; no longer meaningful |
 | Jobs (as customer or worker) | **kept**: id, number, category, area, status, timing, dates, bill items, payment, review | The other party's history and the business's accounts. The deleted person appears as "Deleted user/worker" |
-| Job free text and address of a deleted **customer** | `address_line` replaced by "(removed)"; `lat`, `lng`, `description` and `arrival_code` cleared; `title` kept (proposed: it is what makes the worker's history readable, but it is free text, so it is on the sign-off list) | The home address and anything typed about the problem |
+| Job free text and address of a deleted **customer** | `address_line` replaced by "(removed)"; `lat`, `lng`, `description` and `arrival_code` cleared; **`title` replaced by the service name** (the category's English title, for example "Plumber"; the column is required, so a neutral label is stored) | The home address and anything typed about the problem, **including the typed title**. What stays is what the business and the other party need: the job number, service, area, dates, status, bill amounts, payment and rating |
 | Job media of those jobs | objects and rows deleted | Pictures of a home and a voice |
 | `offers` | kept; `message` cleared; pending ones `WITHDRAWN` | Free text may contain contact details |
 | `payments`, `bill_items` | kept unchanged | Financial records; period in 1.6 |
@@ -115,7 +124,8 @@ operator script before the application is reopened. The script runs the same ano
 | `reviews` and tips | Kept | May ratings stay after deletion, and for how long? |
 | `sos_alerts` (and the location in them) | Kept as they are | Safety/legal retention period; should coordinates be cleared after some time? |
 | `job_security_events` (IP cleared on deletion) | Kept without the IP | Is the pseudonymous audit trail acceptable, and for how long? |
-| Job `title` and offer text | `title` kept, offer `message` cleared | Is a free-text title personal data to be cleared? |
+| Job `title` and offer text | **Decided: `title` cleared to the service name**; offer `message` cleared | Nothing further; recorded so counsel can see it |
+| Bill item descriptions (text the worker typed on the bill, for example "replaced the kitchen tap") | **Kept as written**, because they are lines of a financial record | Do invoice line descriptions have to stay verbatim, or may they be generalised to the item kind after deletion? I have not assumed either |
 | Aadhaar images | Deleted at account deletion (and 7 days after the decision under D-9) | Is collecting them lawful at all, and is 7 days right? |
 | Application logs | Masked already; retention period to be set with the hosting choice | Maximum retention |
 | Database backups | Retention period to be set with the hosting choice (1.5) | Maximum time deleted data may remain in backups |
@@ -147,13 +157,18 @@ re-signing up with the same phone makes a different user; a retry after a simula
 simultaneous deletions give one success; a quote accepted at the same moment cannot strand a job; the ledger entry is
 written; the restore script re-applies a ledger entry. Plus mutation checks of each guard.
 
-### 1.9 Decisions I still need from you (everything else above is settled by your answers)
+### 1.9 Where this stands
 
-1. **Door B:** admin-approved request (recommended) or OTP-only immediate deletion?
-2. **Job `title`:** keep (proposed) or clear?
-3. **Approve the two column additions** (1.7) as a separate, backed-up step when the time comes?
-4. **Take 1.6 to counsel.** I will build with the defaults in the middle column unless told otherwise, and each is a
-   single constant or query to change.
+**Settled by you:** OTP reconfirmation; admin self-deletion refused; refused during active jobs; Door B as an OTP-verified
+request that an admin approves; the typed job title cleared to the service name while the business history is kept;
+retention periods left to counsel.
+
+**Still needed before I implement anything:**
+1. **Your approval of this final design (v3) as a whole.** I will not start until you give it.
+2. **Approval of the two column additions** (1.7) as a separate, backed-up step, in the same way as D-9.
+3. **Counsel's answers** to the table in 1.6. I will build with the defaults in the middle column, each a single constant
+   or query to change, and nothing is switched on in production before they are given.
+4. **An operational answer** for telling a Door B requester the outcome until an SMS template exists (see 1.2).
 
 ---
 
@@ -215,7 +230,7 @@ migration: the development database has no workers and production does not exist
 
 | Question | Answer |
 |---|---|
-| Locks and speed | Both columns are nullable with no default, so `ADD COLUMN` is a catalogue change with no table rewrite. Creating the foreign key briefly scans `worker_profiles` (milliseconds at thousands of rows). The backfill touches only approved workers |
+| Locks and speed | Both columns are nullable with no default, so `ADD COLUMN` rewrites nothing. **But the three statements run in one transaction, so the locks they take are held until it commits:** `ACCESS EXCLUSIVE` on `worker_profiles` (from `ADD COLUMN`) and `SHARE ROW EXCLUSIVE` on `users` (from the foreign key). Measured (2.10): about 0.23 s in total at 50,000 workers, of which the backfill is 215 ms; reads of `worker_profiles` and writes to `users` wait for that long. At a few thousand workers it is a few tens of milliseconds |
 | Compatibility | Additive. The running code ignores the columns, so the migration can be applied **before** the code that uses it is deployed, and the old code keeps working |
 | Why no `CHECK` tying `reviewed_at` to the status | Many e2e helpers set `verification_status` directly and a check would fail them; the code enforces the pairing instead, and the sweep treats NULL as unknown |
 | Index | None. The sweep reads `worker_profiles` once per run; revisit beyond about 100,000 workers |
@@ -284,3 +299,37 @@ workers without one, setting a reviewer, and overwriting an existing time. Each 
 2. **Approve merging** the migration file (it travels with the branch). Merging does not apply it anywhere: the
    release step does, and dev is applied by hand.
 3. **Counsel:** sign-off on collecting Aadhaar images at all, and on 7 days, is still open (D-9).
+
+### 2.10 Review of the migration (2026-10-11): evidence, not a re-read
+
+Everything below was run against `KaamConnect_test` in a **throwaway schema** (`kc_scratch_d9`, created and dropped by a
+script that refuses any database not named `*_test`, refuses to reuse an existing schema name, and dropped only that
+schema). The test database's own tables were not touched.
+
+| Check | Result |
+|---|---|
+| The whole migration chain (all 5 files) applied to an **empty** schema, as CI does | **Succeeded in 2.8 s**; 5 migrations recorded |
+| `prisma migrate diff` between that fresh result and `schema.prisma` | **No difference** |
+| The SQL the migration contains versus what Prisma derives from the schema change | The two schema statements match exactly (compared statement by statement, offline); the third is the hand-written backfill |
+| The migration on **50,000 workers** (one third approved, one third rejected, one third pending) | `ADD COLUMN` 1.5 ms, foreign key 13.0 ms, backfill 215.1 ms (16,666 rows). Total about 0.23 s |
+| Locks held until commit | `ACCESS EXCLUSIVE` on `worker_profiles`; `SHARE ROW EXCLUSIVE` on `worker_profiles` and on `users` |
+| Backfill outcome at that scale | Exactly the 16,666 approved rows got a time; **0 rows** got a reviewer; rejected and pending rows kept a NULL time |
+| The rollback SQL | Valid (run inside a transaction that was rolled back; the columns disappeared inside it and were back afterwards) |
+
+**Findings.**
+1. *(Corrected here.)* My first description said the foreign key "briefly scans `worker_profiles`". It also takes a lock
+   on `users`, and the locks last until the whole migration commits. The duration is negligible at launch scale, but the
+   statement was incomplete.
+2. *Not a defect, but know it:* if `worker_profiles` ever reached millions of rows, the foreign key should be added
+   `NOT VALID` and validated separately to avoid holding the lock. At the scale of this product that is unnecessary.
+3. *Rollback detail:* after running the reverse SQL, the `_prisma_migrations` row for this migration must be removed by
+   hand, since Prisma has no down migration. That is a manual step on a production database and belongs in the runbook
+   (done: `10-runbook.md`, section 2.2 already says migrations are fixed forward; this adds the exception).
+4. *Test dependency:* the backfill test reads the migration file from `prisma/migrations/...` using the working
+   directory, which is the repository root under both Vitest and CI.
+5. *No defect found* in the backfill: it is idempotent (`reviewed_at IS NULL` guard), never writes `reviewed_by`, and
+   leaves rows with no recorded time alone.
+
+**Residual risks.** The application code that will write the new columns and the retention sweep do not exist yet, so
+this migration changes no behaviour; the real risk of D-9 is the later sweep (deleted images cannot be restored), which
+will ship with an off switch and its own review. Counsel's sign-off on Aadhaar images is still open.

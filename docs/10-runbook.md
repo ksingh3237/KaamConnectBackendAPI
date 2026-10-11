@@ -64,6 +64,9 @@ production. Do not enable those settings to make it run: the application refuses
 - **A migration that should not have gone out:** Prisma migrations are forward-only. Fix forward with a new migration if
   you can. If you cannot, restore the pre-release backup (section 3.2), accepting the loss of everything written since
   the backup, and tell the team what that window was.
+  **The one hand-written reversal on file** is for the D-9 migration (`08-milestone-b-designs.md` §2.5): the reverse SQL
+  drops its foreign key and two columns, and then that migration's row is deleted from `_prisma_migrations` by hand
+  (Prisma has no down migration). A second person reads both statements first, and a backup is taken before.
 - Irreversible by design: deleted Aadhaar images (once D-9 exists), anonymised accounts (once `DELETE /me` exists), and
   the `JobTiming` value `SCHEDULED` (K-21, already in the migrations).
 

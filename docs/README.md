@@ -12,6 +12,10 @@ Project setup and commands are in the [root README](../README.md). This folder h
 | [05-security-testing.md](./05-security-testing.md) | Security controls, authorization matrix, test strategy |
 | [06-migrations-seeds.md](./06-migrations-seeds.md) | Migration workflow, seeds, environments |
 | [07-roadmap.md](./07-roadmap.md) | Phases, acceptance criteria, risks, estimates |
+| [08-milestone-b-designs.md](./08-milestone-b-designs.md) | `DELETE /me` final design (not implemented) and the D-9 migration with its review |
+| [09-production-readiness.md](./09-production-readiness.md) | Throttling review and proposals, production environment checklist, launch blockers register, OpenAPI export report |
+| [10-runbook.md](./10-runbook.md) | Operations runbook (draft): release, rollback, backup and restore, common problems |
+| [11-pr-plan.md](./11-pr-plan.md) | Milestone B pull request order, required checks, migration risks |
 | [progress.md](./progress.md) | **Current status**: what is built and verified, known issues, open questions, dependencies, exact next task |
 
 ## Build status
