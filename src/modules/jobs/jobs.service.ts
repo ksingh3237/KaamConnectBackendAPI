@@ -74,6 +74,9 @@ export interface JobListItem {
   /** The reserved window once the booking is confirmed. */
   bookedStartAt: string | null;
   worker: { id: string; name: string; phone: string } | null;
+  /** COMPLETED rows only: the rating the customer gave (null if not rated yet) and whether they did. */
+  rating?: number | null;
+  reviewed?: boolean;
 }
 
 export interface JobListPage {
@@ -248,6 +251,7 @@ export class JobsService {
             user: { select: { phone: true } },
           },
         },
+        review: { select: { rating: true } },
         _count: {
           select: {
             offers: {
@@ -277,6 +281,12 @@ export class JobsService {
         isDirect: job.targetWorkerId !== null,
         scheduledFor: job.scheduledFor?.toISOString() ?? null,
         bookedStartAt: job.bookedStartAt?.toISOString() ?? null,
+        ...(job.status === JobStatus.COMPLETED
+          ? {
+              rating: job.review?.rating ?? null,
+              reviewed: job.review !== null,
+            }
+          : {}),
         worker: job.worker
           ? {
               id: job.worker.userId,

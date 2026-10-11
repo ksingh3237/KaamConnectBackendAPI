@@ -13,6 +13,8 @@ import { CustomersModule } from './modules/customers/customers.module.js';
 import { MediaModule } from './modules/media/media.module.js';
 import { FulfilmentModule } from './modules/fulfilment/fulfilment.module.js';
 import { JobsModule } from './modules/jobs/jobs.module.js';
+import { EarningsModule } from './modules/earnings/earnings.module.js';
+import { ReviewsModule } from './modules/reviews/reviews.module.js';
 import { SafetyModule } from './modules/safety/safety.module.js';
 import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
 import { OffersModule } from './modules/offers/offers.module.js';
@@ -40,6 +42,8 @@ import { PrismaModule } from './prisma/prisma.module.js';
     JobsModule,
     OffersModule,
     FulfilmentModule,
+    ReviewsModule,
+    EarningsModule,
     SafetyModule,
     RealtimeModule,
   ],

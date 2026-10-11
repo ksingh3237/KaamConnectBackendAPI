@@ -16,6 +16,7 @@ import {
 } from './arrival-code.js';
 import { MediaPurpose } from '../media/media-rules.js';
 import { MediaService } from '../media/media.service.js';
+import { ReviewsService, type ReviewView } from '../reviews/reviews.service.js';
 import {
   WorkerCardService,
   cardInclude,
@@ -100,6 +101,10 @@ export interface JobView {
   arrivalLocked?: boolean;
   /** Customer only, while ASSIGNED: how many new codes can still be issued. */
   arrivalResetsLeft?: number;
+  /** COMPLETED jobs, customer and assigned worker only: the rating given, or null while there is none. */
+  review?: ReviewView | null;
+  /** Customer only, COMPLETED: true while the job has not been rated, so the app offers the review screen. */
+  canReview?: boolean;
 }
 
 /** Statuses from which the two parties may call each other. */
@@ -119,6 +124,7 @@ export class JobViewService {
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
     private readonly cards: WorkerCardService,
+    private readonly reviews: ReviewsService,
   ) {}
 
   forCustomer(job: JobRow): Promise<JobView> {
@@ -198,6 +204,10 @@ export class JobViewService {
     };
 
     const maySeeWork = viewer === 'customer' || isAssignedWorker;
+    if (job.status === JobStatus.COMPLETED && maySeeWork) {
+      view.review = await this.reviews.forJob(job.id);
+      if (viewer === 'customer') view.canReview = view.review === null;
+    }
     if (maySeeWork) view.workPhotos = await this.workPhotos(job);
 
     if (viewer === 'customer') {

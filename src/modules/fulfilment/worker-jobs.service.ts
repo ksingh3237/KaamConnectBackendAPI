@@ -33,6 +33,8 @@ export interface WorkerJobItem {
   bookedEndAt: string | null;
   /** Items so far (visit fee, then parts and labour); the final amount once paid. */
   total: number;
+  /** COMPLETED rows only: the rating the customer gave, or null while there is none. */
+  rating?: number | null;
   createdAt: string;
 }
 
@@ -90,6 +92,7 @@ export class WorkerJobsService {
         category: { select: { id: true, titleEn: true } },
         customer: { select: { fullName: true } },
         billItems: { select: { amount: true } },
+        review: { select: { rating: true } },
       },
     });
 
@@ -109,6 +112,9 @@ export class WorkerJobsService {
         bookedStartAt: job.bookedStartAt?.toISOString() ?? null,
         bookedEndAt: job.bookedEndAt?.toISOString() ?? null,
         total: totalOf(job.billItems),
+        ...(job.status === JobStatus.COMPLETED
+          ? { rating: job.review?.rating ?? null }
+          : {}),
         createdAt: job.createdAt.toISOString(),
       })),
       nextCursor:
