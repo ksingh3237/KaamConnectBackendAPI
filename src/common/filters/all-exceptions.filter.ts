@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import type { RequestWithId } from '../logging/request-logger.js';
 import { AppException, type ErrorDetail } from '../exceptions/app.exception.js';
 
 export interface ErrorBody {
@@ -57,14 +58,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    const response = host.switchToHttp().getResponse<Response>();
+    const http = host.switchToHttp();
+    const response = http.getResponse<Response>();
+    const requestId = http.getRequest<RequestWithId | undefined>()?.requestId;
     const body = this.toBody(exception);
 
     // Expected, already-logged domain errors (e.g. DB_UNAVAILABLE) do not need a stack trace.
     if (body.statusCode >= 500 && !(exception instanceof AppException)) {
       // The stack goes to the log only, never into the response.
+      // The logger masks phones and credentials that error messages may echo (e.g. a failed query's values).
       this.logger.error(
-        exception instanceof Error ? exception.stack : String(exception),
+        `req=${requestId ?? '-'} ${exception instanceof Error ? exception.stack : String(exception)}`,
       );
     }
     if (body.retryAfterSec !== undefined) {

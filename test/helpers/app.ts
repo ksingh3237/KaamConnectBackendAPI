@@ -72,7 +72,11 @@ export interface TestApp {
  * development shortcut.
  */
 export async function createTestApp(
-  options: { verificationMode?: 'auto' | 'manual' } = {},
+  options: {
+    verificationMode?: 'auto' | 'manual';
+    /** Off by default: one log line per request would drown the test output. */
+    requestLogging?: boolean;
+  } = {},
 ): Promise<TestApp> {
   const sender = new RecordingOtpSender();
   const safety = new RecordingSafetyNotifier();
@@ -86,7 +90,7 @@ export async function createTestApp(
     .compile();
 
   const app = moduleRef.createNestApplication();
-  configureApp(app);
+  configureApp(app, { requestLogging: options.requestLogging ?? false });
   // Listen once on an ephemeral port so supertest reuses it instead of re-listening per request.
   await app.listen(0, '127.0.0.1');
   return {
