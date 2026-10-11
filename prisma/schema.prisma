@@ -131,7 +131,8 @@ model User {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   customer      CustomerProfile?
-  worker        WorkerProfile?
+  worker        WorkerProfile?   @relation("WorkerUser")
+  reviewedWorkers WorkerProfile[] @relation("WorkerReviewer")
   refreshTokens RefreshToken[]
   sosAlerts     SosAlert[]
   securityEvents JobSecurityEvent[]
@@ -272,6 +273,8 @@ model WorkerProfile {
   badge              String?            @db.VarChar(60)       // admin-assigned label e.g. "Govt Certified Pro"
   verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
   verifiedAt         DateTime?          @map("verified_at") @db.Timestamptz(3)
+  reviewedAt         DateTime?          @map("reviewed_at") @db.Timestamptz(3) // when an admin (or the dev auto-approval) last decided VERIFIED or REJECTED; null = pending or unknown. D-9 counts retention from here
+  reviewedById       String?            @map("reviewed_by") @db.Uuid // the admin who decided; null for the dev auto-approval and for decisions made before this column existed (never guessed)
   rejectionReason    String?            @map("rejection_reason")
   termsAcceptedAt    DateTime           @map("terms_accepted_at") @db.Timestamptz(3)
   ratingSum          Int                @default(0) @map("rating_sum")   // avg = ratingSum / reviewCount
@@ -279,7 +282,8 @@ model WorkerProfile {
   createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User            @relation("WorkerUser", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?           @relation("WorkerReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   baseArea  Area             @relation(fields: [baseAreaId], references: [id])
   trades    WorkerTrade[]
   documents WorkerDocument[]

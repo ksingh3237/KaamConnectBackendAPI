@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { seedReferenceData } from '../prisma/seed/reference-data.js';
 import { createTestPrisma, resetDatabase } from './helpers/db.js';
@@ -444,6 +446,183 @@ describe('database constraints', () => {
       expect(
         await prisma.jobSecurityEvent.count({ where: { jobId: job.id } }),
       ).toBe(3);
+    });
+  });
+
+  describe('D-9 decision audit (worker_profiles.reviewed_at and reviewed_by)', () => {
+    const MIGRATION = join(
+      process.cwd(),
+      'prisma/migrations/20261011200000_worker_review_audit/migration.sql',
+    );
+    /** The backfill is read from the migration file itself, so the test cannot drift from what is applied. */
+    const backfill = () => {
+      const sql = readFileSync(MIGRATION, 'utf8');
+      const start = sql.indexOf('UPDATE "worker_profiles"');
+      if (start < 0) throw new Error('no backfill UPDATE in the migration');
+      return sql.slice(start, sql.indexOf(';', start) + 1);
+    };
+    const profile = (userId: string) =>
+      prisma.workerProfile.findUniqueOrThrow({ where: { userId } });
+
+    it('has the two columns: both nullable, no default, the right types', async () => {
+      const rows = await prisma.$queryRaw<
+        {
+          column_name: string;
+          data_type: string;
+          is_nullable: string;
+          column_default: string | null;
+        }[]
+      >`SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns
+        WHERE table_name = 'worker_profiles' AND column_name IN ('reviewed_at', 'reviewed_by')
+        ORDER BY column_name`;
+      expect(rows).toEqual([
+        {
+          column_name: 'reviewed_at',
+          data_type: 'timestamp with time zone',
+          is_nullable: 'YES',
+          column_default: null,
+        },
+        {
+          column_name: 'reviewed_by',
+          data_type: 'uuid',
+          is_nullable: 'YES',
+          column_default: null,
+        },
+      ]);
+    });
+
+    it('a new worker has no decision recorded', async () => {
+      const w = await makeWorker(prisma);
+      expect(w.reviewedAt).toBeNull();
+      expect(w.reviewedById).toBeNull();
+    });
+
+    it('records who decided and when, and refuses a reviewer who does not exist (worker_profiles_reviewed_by_fkey)', async () => {
+      const admin = await makeUser(prisma);
+      const w = await makeWorker(prisma);
+      const at = new Date('2026-10-01T10:00:00.000Z');
+      await prisma.workerProfile.update({
+        where: { userId: w.userId },
+        data: { reviewedAt: at, reviewedById: admin.id },
+      });
+      const stored = await profile(w.userId);
+      expect(stored.reviewedAt).toEqual(at);
+      expect(stored.reviewedById).toBe(admin.id);
+
+      await expect(
+        prisma.workerProfile.update({
+          where: { userId: w.userId },
+          data: { reviewedById: '0197a0c0-0000-7000-8000-000000000000' },
+        }),
+      ).rejects.toThrow(/worker_profiles_reviewed_by_fkey/);
+    });
+
+    it('removing the reviewer never removes or blocks the worker: reviewed_by becomes NULL, the time stays (ON DELETE SET NULL)', async () => {
+      const admin = await makeUser(prisma);
+      const w = await makeWorker(prisma);
+      const at = new Date('2026-10-01T10:00:00.000Z');
+      await prisma.workerProfile.update({
+        where: { userId: w.userId },
+        data: { reviewedAt: at, reviewedById: admin.id },
+      });
+      await prisma.user.delete({ where: { id: admin.id } });
+      const stored = await profile(w.userId);
+      expect(stored.reviewedById).toBeNull();
+      expect(stored.reviewedAt).toEqual(at);
+    });
+
+    it('deleting the WORKER still cascades their profile as before (the second relation to users did not change it)', async () => {
+      const w = await makeWorker(prisma);
+      await prisma.user.delete({ where: { id: w.userId } });
+      expect(
+        await prisma.workerProfile.count({ where: { userId: w.userId } }),
+      ).toBe(0);
+    });
+
+    describe('the backfill statement in the migration', () => {
+      const decide = (
+        userId: string,
+        data: {
+          verificationStatus: 'PENDING' | 'VERIFIED' | 'REJECTED';
+          verifiedAt?: Date | null;
+          reviewedAt?: Date | null;
+        },
+      ) =>
+        prisma.workerProfile.update({
+          where: { userId },
+          data: { rejectionReason: null, ...data },
+        });
+
+      it('carries over a recorded approval time and invents nothing else', async () => {
+        const approvedAt = new Date('2026-09-20T08:30:00.000Z');
+        const approved = await makeWorker(prisma);
+        const approvedNoTime = await makeWorker(prisma);
+        const rejected = await makeWorker(prisma);
+        const pending = await makeWorker(prisma);
+        await decide(approved.userId, {
+          verificationStatus: 'VERIFIED',
+          verifiedAt: approvedAt,
+        });
+        await decide(approvedNoTime.userId, {
+          verificationStatus: 'VERIFIED',
+          verifiedAt: null,
+        });
+        await prisma.workerProfile.update({
+          where: { userId: rejected.userId },
+          data: {
+            verificationStatus: 'REJECTED',
+            rejectionReason: 'blurred photo',
+          },
+        });
+
+        await prisma.$executeRawUnsafe(backfill());
+
+        expect((await profile(approved.userId)).reviewedAt).toEqual(approvedAt);
+        // No recorded time, so none is made up: these stay NULL (the sweep never deletes on NULL).
+        expect((await profile(approvedNoTime.userId)).reviewedAt).toBeNull();
+        expect((await profile(rejected.userId)).reviewedAt).toBeNull();
+        expect((await profile(pending.userId)).reviewedAt).toBeNull();
+      });
+
+      it('never invents a reviewer: reviewed_by is NULL on every row afterwards', async () => {
+        const a = await makeWorker(prisma);
+        const b = await makeWorker(prisma);
+        await decide(a.userId, {
+          verificationStatus: 'VERIFIED',
+          verifiedAt: new Date('2026-09-20T08:30:00.000Z'),
+        });
+        await decide(b.userId, { verificationStatus: 'REJECTED' });
+        await prisma.$executeRawUnsafe(backfill());
+        expect(
+          await prisma.workerProfile.count({
+            where: { reviewedById: { not: null } },
+          }),
+        ).toBe(0);
+      });
+
+      it('does not overwrite a decision time that is already set, and running it again changes nothing', async () => {
+        const w = await makeWorker(prisma);
+        const real = new Date('2026-10-05T12:00:00.000Z');
+        await decide(w.userId, {
+          verificationStatus: 'VERIFIED',
+          verifiedAt: new Date('2026-09-20T08:30:00.000Z'),
+          reviewedAt: real,
+        });
+        await prisma.$executeRawUnsafe(backfill());
+        await prisma.$executeRawUnsafe(backfill());
+        expect((await profile(w.userId)).reviewedAt).toEqual(real);
+      });
+
+      it('leaves a worker who went back to PENDING without a decision time', async () => {
+        const w = await makeWorker(prisma);
+        // verified_at is cleared when a profile returns to PENDING (D-8), so there is nothing to carry.
+        await decide(w.userId, {
+          verificationStatus: 'PENDING',
+          verifiedAt: null,
+        });
+        await prisma.$executeRawUnsafe(backfill());
+        expect((await profile(w.userId)).reviewedAt).toBeNull();
+      });
     });
   });
 });
