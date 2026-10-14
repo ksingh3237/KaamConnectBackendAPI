@@ -12,3 +12,7 @@ src/generated/
 *.tsbuildinfo
 
 .local-storage/
+
+# Firebase Admin Credentials
+firebase-service-account.json
+*-firebase-adminsdk-*.json

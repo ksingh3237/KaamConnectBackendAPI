@@ -16,6 +16,7 @@ Project setup and commands are in the [root README](../README.md). This folder h
 | [09-production-readiness.md](./09-production-readiness.md) | Throttling review and proposals, production environment checklist, launch blockers register, OpenAPI export report |
 | [10-runbook.md](./10-runbook.md) | Operations runbook (draft): release, rollback, backup and restore, common problems |
 | [11-pr-plan.md](./11-pr-plan.md) | Milestone B pull request order, required checks, migration risks |
+| [13-firebase-phone-auth.md](./13-firebase-phone-auth.md) | Firebase phone sign-in: `POST /auth/firebase/verify`, deletion with a Firebase token, `LEGACY_OTP_ENABLED`, the service-account key, console settings |
 | [progress.md](./progress.md) | **Current status**: what is built and verified, known issues, open questions, dependencies, exact next task |
 
 ## Build status

@@ -9,6 +9,7 @@ import { Public } from '../../common/decorators/public.decorator.js';
 import { OtpChannel } from '../../generated/prisma/enums.js';
 import { AuthService, type VerifyResult } from './auth.service.js';
 import {
+  FirebaseVerifyDto,
   RefreshTokenDto,
   RequestOtpDto,
   VerifyOtpDto,
@@ -38,6 +39,15 @@ export class AuthController {
   @HttpCode(200)
   verifyOtp(@Body() dto: VerifyOtpDto): Promise<VerifyResult> {
     return this.auth.verifyOtp(dto.phone, dto.code);
+  }
+
+  // Same per-IP budget as the SMS-code check. Firebase limits the SMS sending itself; this guards our exchange.
+  @Public()
+  @Throttle({ default: { limit: 30, ttl: QUARTER_HOUR } })
+  @Post('firebase/verify')
+  @HttpCode(200)
+  verifyFirebase(@Body() dto: FirebaseVerifyDto): Promise<VerifyResult> {
+    return this.auth.verifyFirebase(dto.idToken);
   }
 
   @Public()

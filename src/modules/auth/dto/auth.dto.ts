@@ -20,6 +20,13 @@ export class VerifyOtpDto {
   code!: string;
 }
 
+export class FirebaseVerifyDto {
+  /** The ID token from Firebase Phone Authentication (a JWT, roughly 1 KB). The bounds only stop absurd payloads. */
+  @IsString()
+  @Length(20, 4096)
+  idToken!: string;
+}
+
 export class RefreshTokenDto {
   // Opaque 43-char base64url value; the bounds only stop absurd payloads.
   @IsString()

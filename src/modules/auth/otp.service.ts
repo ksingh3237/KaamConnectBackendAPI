@@ -38,7 +38,19 @@ export class OtpService {
     private readonly config: ConfigService<EnvVars, true>,
   ) {}
 
+  /** LEGACY_OTP_ENABLED=false switches the SMS-code login off everywhere it is used (login and account deletion). */
+  private assertEnabled(): void {
+    if (!this.config.get('LEGACY_OTP_ENABLED', { infer: true })) {
+      throw new AppException(
+        'LEGACY_OTP_DISABLED',
+        404,
+        'SMS-code sign-in is not available; use phone verification in the app',
+      );
+    }
+  }
+
   async request(phone: string, channel: OtpChannel): Promise<OtpRequestResult> {
+    this.assertEnabled();
     if (channel === OtpChannel.WHATSAPP) {
       throw new AppException(
         'CHANNEL_NOT_AVAILABLE',
@@ -143,6 +155,7 @@ export class OtpService {
    * Every failure for "no such code / wrong / expired / already used" is the same OTP_INVALID.
    */
   async check(phone: string, code: string): Promise<string> {
+    this.assertEnabled();
     const maxAttempts = this.config.get('OTP_MAX_ATTEMPTS', { infer: true });
 
     const challenge = await this.prisma.otpChallenge.findFirst({

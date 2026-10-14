@@ -26,6 +26,7 @@ REST/JSON, base path `/api/v1`, OpenAPI generated from the DTOs (`/api/docs`, di
 |---|---|---|
 | `POST /auth/otp/request` | public, throttled | `{ phone, channel?: "SMS"\|"WHATSAPP" }` → `202 { resendAfterSec: 30, expiresInSec: 300 }`. Always 202 (no account enumeration) |
 | `POST /auth/otp/verify` | public, throttled | `{ phone, code }` (6 digits) → `{ accessToken, refreshToken, expiresIn, isNewUser, user: { id, phone, language, hasCustomerProfile, hasWorkerProfile } }`. Wrong/expired → `401 OTP_INVALID`; too many tries → `429 OTP_LOCKED` |
+| `POST /auth/firebase/verify` | public, throttled | `{ idToken }` (a Firebase ID token from Phone Authentication) → the **same reply as `/auth/otp/verify`**. See `13-firebase-phone-auth.md`. `501 FIREBASE_AUTH_NOT_CONFIGURED` while the server has Firebase switched off |
 | `POST /auth/refresh` | public | `{ refreshToken }` → new pair (rotation; reuse ⇒ whole family revoked) |
 | `POST /auth/logout` | auth | `{ refreshToken }` → `204` |
 
@@ -252,12 +253,15 @@ Rules
 
 ## 7. Authentication contract (built in Phase 2)
 
-Everything is under `/api/v1` and **requires `Authorization: Bearer <accessToken>` unless marked public**. Public: `GET /health*`, `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/refresh`. Phone numbers may be sent as `98765 43210`, `9876543210` or `+919876543210`; the server stores E.164 and accepts Indian mobiles only (`[6-9]` + 9 digits).
+Everything is under `/api/v1` and **requires `Authorization: Bearer <accessToken>` unless marked public**. Public: `GET /health*`, `POST /auth/otp/request`, `POST /auth/otp/verify`, `POST /auth/firebase/verify`, `POST /auth/deletion-requests`, `POST /auth/refresh`. With `LEGACY_OTP_ENABLED=false` the two `/auth/otp/*` routes answer `404 LEGACY_OTP_DISABLED`. Phone numbers may be sent as `98765 43210`, `9876543210` or `+919876543210`; the server stores E.164 and accepts Indian mobiles only (`[6-9]` + 9 digits).
 
 | Endpoint | Success | Notes |
 |---|---|---|
 | `POST /auth/otp/request` `{phone, channel?}` | `202 {resendAfterSec: 30, expiresInSec: 300}` | Identical answer whether or not the number has an account. A new code replaces the previous one |
 | `POST /auth/otp/verify` `{phone, code}` | `200 {accessToken, refreshToken, expiresIn: 900, isNewUser, user:{id, phone, language, hasCustomerProfile, hasWorkerProfile}}` | `isNewUser` is true only for the call that created the account. Use the two `has…Profile` flags to decide whether onboarding is needed |
+| `POST /auth/firebase/verify` `{idToken}` | `200` (same body as `/auth/otp/verify`) | The phone number comes **only from the verified token** (never from the request). Accepted only for a Firebase **phone** sign-in done within the last `FIREBASE_AUTH_MAX_AGE_SEC` (300 s) for an Indian mobile. 30 per 15 min per IP. Creates the account on first use, exactly like the SMS login; starts the same HS256 + rotating-refresh session. No Firebase token or Firebase uid is stored |
+| `DELETE /me` `{confirm: true, code}` **or** `{confirm: true, firebaseIdToken}` | `204` | Exactly one proof of the phone number: the SMS `code` (needs `LEGACY_OTP_ENABLED`) **or** a fresh Firebase ID token whose number is the account's own (`403 PHONE_MISMATCH` otherwise). Neither or both: `422`. Active-job refusal (`409`) is decided before the proof is checked |
+| `POST /auth/deletion-requests` `{phone, code}` **or** `{firebaseIdToken}` (optionally with `phone`) | `202` | Door B for a disabled account. With a token the number comes from the token; a `phone` that differs from it is `403 PHONE_MISMATCH`. Same reply for every number |
 | `POST /auth/refresh` `{refreshToken}` | `200 {accessToken, refreshToken, expiresIn}` | **Rotates**: the old refresh token is spent; store the new one |
 | `POST /auth/logout` `{refreshToken}` | `204` | Auth required. Ends that login (all its tokens). Idempotent. **Also allowed for a disabled account** (K-37): the only protected route that is |
 | `GET /me` | `200 {id, phone, language, customer, worker}` | `customer`/`worker` are `null` until Phase 3 creates profiles |
@@ -270,6 +274,13 @@ Everything is under `/api/v1` and **requires `Authorization: Bearer <accessToken
 | 401 | `UNAUTHENTICATED` | No/invalid token → go to login |
 | 401 | `TOKEN_EXPIRED` | Access token expired → call `/auth/refresh`, retry once |
 | 401 | `OTP_INVALID` | Wrong, expired, unknown or already-used code (deliberately indistinguishable) |
+| 401 | `FIREBASE_TOKEN_INVALID` | Firebase token malformed, forged, expired, revoked, not a phone sign-in, or without a phone number → ask for a new SMS |
+| 401 | `FIREBASE_TOKEN_STALE` | The phone was verified more than `FIREBASE_AUTH_MAX_AGE_SEC` ago → ask for a new SMS |
+| 403 | `PHONE_MISMATCH` | (deletion) the verified number is not this account's number |
+| 404 | `LEGACY_OTP_DISABLED` | The SMS-code login is switched off on this server (`LEGACY_OTP_ENABLED=false`) |
+| 422 | `PHONE_NOT_SUPPORTED` | The Firebase-verified number is not an Indian mobile |
+| 501 | `FIREBASE_AUTH_NOT_CONFIGURED` | Firebase sign-in is off on this server |
+| 503 | `FIREBASE_UNAVAILABLE` | The token check could not be made (credentials or network); retry |
 | 401 | `REFRESH_INVALID` | Unknown or expired refresh token → login |
 | 401 | `REFRESH_REUSED` | Refresh token already used or its login was ended (logout / suspected theft) → login |
 | 403 | `ACCOUNT_DISABLED` | Account switched off |

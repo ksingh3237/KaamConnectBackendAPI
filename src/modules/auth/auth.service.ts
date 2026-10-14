@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { AppException } from '../../common/exceptions/app.exception.js';
+import type { Prisma } from '../../generated/prisma/client.js';
 import type { OtpChannel } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { FirebasePhoneProof } from './firebase/firebase-phone-proof.service.js';
 import { OtpService, type OtpRequestResult } from './otp.service.js';
 import { TokenService, type TokenPair } from './token.service.js';
 
@@ -25,6 +27,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly otp: OtpService,
     private readonly tokens: TokenService,
+    private readonly firebase: FirebasePhoneProof,
   ) {}
 
   requestOtp(phone: string, channel: OtpChannel): Promise<OtpRequestResult> {
@@ -52,41 +55,59 @@ export class AuthService {
         );
       }
 
-      const existed =
-        (await tx.user.findUnique({
-          where: { phone },
-          select: { id: true },
-        })) !== null;
-      const user = await tx.user.upsert({
-        where: { phone },
-        create: { phone },
-        update: {},
-        include: {
-          customer: { select: { userId: true } },
-          worker: { select: { userId: true } },
-        },
-      });
-      if (!user.isActive) {
-        throw new AppException(
-          'ACCOUNT_DISABLED',
-          403,
-          'This account is disabled',
-        );
-      }
-
-      const tokens = await this.tokens.createSession(tx, user.id);
-      return {
-        ...tokens,
-        isNewUser: !existed,
-        user: {
-          id: user.id,
-          phone: user.phone,
-          language: user.language,
-          hasCustomerProfile: user.customer !== null,
-          hasWorkerProfile: user.worker !== null,
-        },
-      };
+      return this.startSession(tx, phone);
     });
+  }
+
+  /**
+   * Signs in with a Firebase ID token from Phone Authentication. The token proves the phone number (see
+   * FirebasePhoneProof); everything after that is the same as for an SMS code: find or create the user, start our
+   * own session. The Firebase token is not kept and Firebase's user id is not stored.
+   */
+  async verifyFirebase(idToken: string): Promise<VerifyResult> {
+    const phone = await this.firebase.verifiedPhone(idToken);
+    return this.prisma.$transaction((tx) => this.startSession(tx, phone));
+  }
+
+  /** Finds or creates the user for a phone number that has just been proven, and starts a session. */
+  private async startSession(
+    tx: Prisma.TransactionClient,
+    phone: string,
+  ): Promise<VerifyResult> {
+    const existed =
+      (await tx.user.findUnique({
+        where: { phone },
+        select: { id: true },
+      })) !== null;
+    const user = await tx.user.upsert({
+      where: { phone },
+      create: { phone },
+      update: {},
+      include: {
+        customer: { select: { userId: true } },
+        worker: { select: { userId: true } },
+      },
+    });
+    if (!user.isActive) {
+      throw new AppException(
+        'ACCOUNT_DISABLED',
+        403,
+        'This account is disabled',
+      );
+    }
+
+    const tokens = await this.tokens.createSession(tx, user.id);
+    return {
+      ...tokens,
+      isNewUser: !existed,
+      user: {
+        id: user.id,
+        phone: user.phone,
+        language: user.language,
+        hasCustomerProfile: user.customer !== null,
+        hasWorkerProfile: user.worker !== null,
+      },
+    };
   }
 
   refresh(refreshToken: string): Promise<TokenPair> {

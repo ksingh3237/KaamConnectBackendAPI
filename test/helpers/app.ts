@@ -5,6 +5,11 @@ import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
 import { USER_RATE_LIMIT } from '../../src/common/throttle/user-throttler.guard.js';
 import type { OtpChannel } from '../../src/generated/prisma/enums.js';
+import {
+  FirebaseTokenVerifier,
+  type FirebaseClaims,
+} from '../../src/modules/auth/firebase/firebase-verifier.js';
+import { AppException } from '../../src/common/exceptions/app.exception.js';
 import { OtpSender } from '../../src/modules/auth/sms/otp-sender.js';
 import {
   SafetyNotifier,
@@ -40,6 +45,57 @@ export class RecordingOtpSender extends OtpSender {
   }
 }
 
+/**
+ * Stands in for Google: hands out fake "Firebase ID tokens" and answers verify() from a table, so no test ever calls
+ * Firebase. Claims default to a fresh, valid Indian phone sign-in; pass overrides to build a bad token.
+ */
+export class FakeFirebaseVerifier extends FirebaseTokenVerifier {
+  private readonly tokens = new Map<string, FirebaseClaims>();
+  private counter = 0;
+  /** Set to make the next verify() behave as if Google could not be reached. */
+  unavailableNext = false;
+  verified: string[] = [];
+
+  issue(phone: string, overrides: Partial<FirebaseClaims> = {}): string {
+    this.counter += 1;
+    // Real ID tokens are ~1 KB; the request DTO insists on at least 20 characters.
+    const token = `fake-firebase-id-token-${this.counter}-${'x'.repeat(40)}`;
+    this.tokens.set(token, {
+      uid: `uid-${phone}`,
+      phoneNumber: phone,
+      signInProvider: 'phone',
+      authTimeSec: Math.floor(Date.now() / 1000),
+      ...overrides,
+    });
+    return token;
+  }
+
+  verify(idToken: string): Promise<FirebaseClaims> {
+    this.verified.push(idToken);
+    if (this.unavailableNext) {
+      this.unavailableNext = false;
+      return Promise.reject(
+        new AppException(
+          'FIREBASE_UNAVAILABLE',
+          503,
+          'Phone verification is temporarily unavailable',
+        ),
+      );
+    }
+    const claims = this.tokens.get(idToken);
+    if (!claims) {
+      return Promise.reject(
+        new AppException(
+          'FIREBASE_TOKEN_INVALID',
+          401,
+          'The phone verification could not be confirmed',
+        ),
+      );
+    }
+    return Promise.resolve(claims);
+  }
+}
+
 /** Stands in for the safety desk: remembers every SOS it was asked to deliver. */
 export class RecordingSafetyNotifier extends SafetyNotifier {
   sent: SosNotification[] = [];
@@ -63,6 +119,7 @@ export interface TestApp {
   app: INestApplication;
   prisma: PrismaService;
   sender: RecordingOtpSender;
+  firebase: FakeFirebaseVerifier;
   safety: RecordingSafetyNotifier;
   close: () => Promise<void>;
 }
@@ -84,6 +141,7 @@ export async function createTestApp(
   } = {},
 ): Promise<TestApp> {
   const sender = new RecordingOtpSender();
+  const firebase = new FakeFirebaseVerifier();
   const safety = new RecordingSafetyNotifier();
   let builder = Test.createTestingModule({ imports: [AppModule] });
   if (options.userRateLimitPerMin !== undefined)
@@ -93,6 +151,8 @@ export async function createTestApp(
   const moduleRef = await builder
     .overrideProvider(OtpSender)
     .useValue(sender)
+    .overrideProvider(FirebaseTokenVerifier)
+    .useValue(firebase)
     .overrideProvider(SafetyNotifier)
     .useValue(safety)
     .overrideProvider(WORKER_VERIFICATION_MODE)
@@ -110,6 +170,7 @@ export async function createTestApp(
     app,
     prisma: app.get(PrismaService),
     sender,
+    firebase,
     safety,
     close: () => app.close(),
   };

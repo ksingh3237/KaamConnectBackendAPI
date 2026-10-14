@@ -81,6 +81,40 @@ export class EnvVars {
   WORKER_VERIFICATION_MODE: WorkerVerificationMode =
     WorkerVerificationMode.Manual;
 
+  // --- Firebase phone sign-in ---
+  // The app proves a phone number with Firebase Phone Authentication and sends the resulting Firebase ID token to
+  // POST /auth/firebase/verify. Off by default; turning it on requires server credentials (exactly one of the two
+  // variables below). The credentials are backend-only secrets: never commit them, never ship them in the app.
+  @Transform(toBoolean)
+  @IsBoolean()
+  FIREBASE_AUTH_ENABLED: boolean = false;
+
+  // Path of the Firebase service-account JSON file. Keep the file OUTSIDE the repository.
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsString()
+  FIREBASE_SERVICE_ACCOUNT_PATH?: string;
+
+  // The same JSON, base64-encoded, for hosts that inject secrets as environment variables instead of files.
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsString()
+  FIREBASE_SERVICE_ACCOUNT_JSON_BASE64?: string;
+
+  // How recently the person must have verified the phone with Firebase (auth_time) for the token to be accepted, in
+  // seconds. A Firebase ID token itself lives an hour; this window is what stops an old copy from being replayed.
+  @Transform(toNumber)
+  @IsInt()
+  @Min(30)
+  @Max(900)
+  FIREBASE_AUTH_MAX_AGE_SEC: number = 300;
+
+  // The original SMS-code login (POST /auth/otp/request and /verify, and the `code` form of account deletion).
+  // Set to false to switch it off completely, which is the intended production setting once Firebase is enabled.
+  @Transform(toBoolean)
+  @IsBoolean()
+  LEGACY_OTP_ENABLED: boolean = true;
+
   // --- Network ---
   // Number of reverse proxies in front of the app (AWS ALB = 1). 0 = connect directly.
   // Needed so rate limits key on the real client IP rather than the load balancer's.
@@ -323,9 +357,10 @@ export function crossFieldProblems(env: EnvVars): string[] {
     if (env.OTP_DEV_BYPASS) {
       problems.push('OTP_DEV_BYPASS must be false in production');
     }
-    if (env.SMS_PROVIDER === SmsProvider.Console) {
+    // The SMS provider only matters while the legacy SMS-code login is on.
+    if (env.LEGACY_OTP_ENABLED && env.SMS_PROVIDER === SmsProvider.Console) {
       problems.push(
-        'SMS_PROVIDER=console (logs OTPs) is not allowed in production',
+        'SMS_PROVIDER=console (logs OTPs) is not allowed in production; set LEGACY_OTP_ENABLED=false when Firebase sign-in is the login method',
       );
     }
     if (env.WORKER_VERIFICATION_MODE === WorkerVerificationMode.Auto) {
@@ -343,6 +378,27 @@ export function crossFieldProblems(env: EnvVars): string[] {
     if (env.STORAGE_PROVIDER === StorageProvider.Local) {
       problems.push(
         'STORAGE_PROVIDER=local (files on the server disk) is not allowed in production; use s3',
+      );
+    }
+  }
+
+  // Login must always be possible AND unambiguous: refuse to start rather than run with no way in, or with
+  // credentials that are half configured.
+  if (!env.LEGACY_OTP_ENABLED && !env.FIREBASE_AUTH_ENABLED) {
+    problems.push(
+      'LEGACY_OTP_ENABLED=false requires FIREBASE_AUTH_ENABLED=true: otherwise nobody can sign in',
+    );
+  }
+  if (env.FIREBASE_AUTH_ENABLED) {
+    const hasPath = Boolean(env.FIREBASE_SERVICE_ACCOUNT_PATH);
+    const hasJson = Boolean(env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64);
+    if (!hasPath && !hasJson) {
+      problems.push(
+        'FIREBASE_AUTH_ENABLED=true requires FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON_BASE64',
+      );
+    } else if (hasPath && hasJson) {
+      problems.push(
+        'Set only one of FIREBASE_SERVICE_ACCOUNT_PATH and FIREBASE_SERVICE_ACCOUNT_JSON_BASE64',
       );
     }
   }

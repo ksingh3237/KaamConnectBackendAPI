@@ -9,7 +9,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { Equals, Matches } from 'class-validator';
+import { Equals, IsOptional, IsString, Length, Matches } from 'class-validator';
 import {
   CurrentUser,
   type AuthenticatedUser,
@@ -25,9 +25,20 @@ import {
 const HOUR = 60 * 60 * 1000;
 
 export class DeleteAccountDto {
-  /** A fresh code from `POST /auth/otp/request` for the account's own number. */
+  /**
+   * Proof of the phone number, in ONE of two forms (the service rejects none or both):
+   *  - `code`: a fresh code from `POST /auth/otp/request` for the account's own number (legacy SMS login);
+   *  - `firebaseIdToken`: an ID token from a Firebase phone sign-in done just now (see FIREBASE_AUTH_MAX_AGE_SEC)
+   *    for the account's own number.
+   */
+  @IsOptional()
   @Matches(/^\d{6}$/, { message: 'code must be exactly 6 digits' })
-  code!: string;
+  code?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(20, 4096)
+  firebaseIdToken?: string;
 
   /** The app sends true only after the person confirmed on a screen that explains what is lost. */
   @Equals(true, { message: 'confirm must be true' })
@@ -35,11 +46,20 @@ export class DeleteAccountDto {
 }
 
 export class DeletionRequestDto {
+  /** Required with `code`. With `firebaseIdToken` it may be left out (the token names the number). */
+  @IsOptional()
   @IsIndianMobile()
-  phone!: string;
+  phone?: string;
 
+  /** Exactly one of `code` and `firebaseIdToken`, as for DeleteAccountDto. */
+  @IsOptional()
   @Matches(/^\d{6}$/, { message: 'code must be exactly 6 digits' })
-  code!: string;
+  code?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(20, 4096)
+  firebaseIdToken?: string;
 }
 
 /** Account deletion by anonymisation (docs/08 section 1). */
@@ -54,7 +74,10 @@ export class AccountController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: DeleteAccountDto,
   ): Promise<void> {
-    await this.deletion.deleteOwn(user.id, dto.code);
+    await this.deletion.deleteOwn(user.id, {
+      code: dto.code,
+      firebaseIdToken: dto.firebaseIdToken,
+    });
   }
 
   /**
@@ -66,7 +89,10 @@ export class AccountController {
   @Post('auth/deletion-requests')
   @HttpCode(202)
   async request(@Body() dto: DeletionRequestDto): Promise<{ message: string }> {
-    await this.deletion.requestAsDisabled(dto.phone, dto.code);
+    await this.deletion.requestAsDisabled(dto.phone, {
+      code: dto.code,
+      firebaseIdToken: dto.firebaseIdToken,
+    });
     return {
       message:
         'If this number belongs to an account, your request has been received and will be reviewed.',

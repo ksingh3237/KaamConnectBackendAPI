@@ -140,7 +140,7 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
 
   it('finds the routes it is meant to probe (so the test cannot pass by finding nothing)', () => {
     const protectedRoutes = routes.filter((r) => !r.isPublic);
-    expect(routes.length).toBe(73);
+    expect(routes.length).toBe(74); // 73 + POST /auth/firebase/verify
     expect(protectedRoutes.length).toBeGreaterThanOrEqual(50);
     expect(
       protectedRoutes
@@ -173,6 +173,7 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
         'GET /health/ready',
         'POST /auth/otp/request',
         'POST /auth/otp/verify',
+        'POST /auth/firebase/verify',
         'POST /auth/refresh',
         // A disabled person cannot hold a session, so asking for deletion must work without one (docs/08 Door B).
         'POST /auth/deletion-requests',

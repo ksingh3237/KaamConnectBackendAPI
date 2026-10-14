@@ -2,6 +2,7 @@ import type { Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SmsProvider, type EnvVars } from '../../../config/env.validation.js';
 import { ConsoleOtpSender } from './console-otp-sender.js';
+import { DisabledOtpSender } from './disabled-otp-sender.js';
 import { OtpSender } from './otp-sender.js';
 
 /** Chooses the sender from SMS_PROVIDER at startup. */
@@ -9,6 +10,11 @@ export const otpSenderProvider: Provider = {
   provide: OtpSender,
   inject: [ConfigService],
   useFactory: (config: ConfigService<EnvVars, true>): OtpSender => {
+    // Legacy login off (production with Firebase sign-in): no provider is needed, and none is created, so MSG91 is
+    // not required for the Firebase flow.
+    if (!config.get('LEGACY_OTP_ENABLED', { infer: true })) {
+      return new DisabledOtpSender();
+    }
     switch (config.get('SMS_PROVIDER', { infer: true })) {
       case SmsProvider.Console:
         return new ConsoleOtpSender();

@@ -13,6 +13,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { StorageService } from '../media/storage/storage.service.js';
 import type { StorageBucket } from '../media/media-rules.js';
+import { FirebasePhoneProof } from '../auth/firebase/firebase-phone-proof.service.js';
 import { OtpService } from '../auth/otp.service.js';
 import { RealtimeEvent } from '../realtime/events.js';
 import { RealtimePublisher } from '../realtime/realtime-publisher.js';
@@ -33,6 +34,43 @@ export const BLOCKING_JOB_STATUSES: JobStatus[] = [
 export const DELETED_CUSTOMER_NAME = 'Deleted user';
 export const DELETED_WORKER_NAME = 'Deleted worker';
 export const REMOVED_ADDRESS = '(removed)';
+
+/** How the caller proves they hold the phone number: an SMS code (legacy) OR a Firebase ID token, never both. */
+export interface PhoneProofInput {
+  code?: string;
+  firebaseIdToken?: string;
+}
+
+type ChosenProof =
+  { kind: 'code'; code: string } | { kind: 'firebase'; idToken: string };
+
+export function chooseProof(proof: PhoneProofInput): ChosenProof {
+  const hasCode = proof.code !== undefined;
+  const hasToken = proof.firebaseIdToken !== undefined;
+  if (hasCode === hasToken) {
+    throw new AppException(
+      'VALIDATION_FAILED',
+      422,
+      'Request validation failed',
+      [
+        {
+          field: hasCode ? 'firebaseIdToken' : 'code',
+          issue: 'send exactly one of code or firebaseIdToken',
+        },
+      ],
+    );
+  }
+  return hasToken
+    ? { kind: 'firebase', idToken: proof.firebaseIdToken! }
+    : { kind: 'code', code: proof.code! };
+}
+
+const phoneMismatch = () =>
+  new AppException(
+    'PHONE_MISMATCH',
+    403,
+    'The verified phone number does not belong to this account',
+  );
 
 type Actor = { kind: 'SELF' } | { kind: 'ADMIN'; adminId: string };
 type Db = Prisma.TransactionClient | PrismaService;
@@ -58,6 +96,7 @@ export class AccountDeletionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly otp: OtpService,
+    private readonly firebase: FirebasePhoneProof,
     private readonly storage: StorageService,
     private readonly publisher: RealtimePublisher,
     private readonly ledger: DeletionLedger,
@@ -65,7 +104,8 @@ export class AccountDeletionService {
 
   // ───────────────────────── Door A: the person, with a fresh code ─────────────────────────
 
-  async deleteOwn(userId: string, code: string): Promise<void> {
+  async deleteOwn(userId: string, proof: PhoneProofInput): Promise<void> {
+    const method = chooseProof(proof);
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { phone: true, isAdmin: true, deletedAt: true },
@@ -77,9 +117,16 @@ export class AccountDeletionService {
     // Cheap refusals first, so a person with a job in progress does not spend a code attempt
     await this.assertNoBlockers(this.prisma, userId);
 
-    // The code proves control of the phone number (the session alone, e.g. a stolen token, is not enough).
-    // It is spent in the same transaction that anonymises, so a failed attempt (storage down) can be retried.
-    const challengeId = await this.otp.check(user.phone, code);
+    // A fresh proof of the phone number is needed (the session alone, e.g. a stolen token, is not enough): either
+    // an SMS code, spent in the same transaction that anonymises so a failed attempt (storage down) can be retried,
+    // or a recent Firebase phone sign-in, which must be for THIS account's own number.
+    if (method.kind === 'firebase') {
+      const proven = await this.firebase.verifiedPhone(method.idToken);
+      if (proven !== user.phone) throw phoneMismatch();
+      await this.anonymise(userId, { kind: 'SELF' });
+      return;
+    }
+    const challengeId = await this.otp.check(user.phone, method.code);
     await this.anonymise(userId, { kind: 'SELF' }, challengeId);
   }
 
@@ -89,12 +136,29 @@ export class AccountDeletionService {
    * Records that the holder of this number asked for deletion. Answers nothing about whether an account exists:
    * the caller always gets the same reply. Does NOT delete: a disabled account may be under investigation.
    */
-  async requestAsDisabled(phone: string, code: string): Promise<void> {
-    const challengeId = await this.otp.check(phone, code);
-    await this.prisma.otpChallenge.updateMany({
-      where: { id: challengeId, consumedAt: null },
-      data: { consumedAt: new Date() },
-    });
+  async requestAsDisabled(
+    claimedPhone: string | undefined,
+    proof: PhoneProofInput,
+  ): Promise<void> {
+    const method = chooseProof(proof);
+    let phone: string;
+    if (method.kind === 'firebase') {
+      // The number comes from the verified token. If the caller also named one, it must be the same number.
+      phone = await this.firebase.verifiedPhone(method.idToken);
+      if (claimedPhone !== undefined && claimedPhone !== phone)
+        throw phoneMismatch();
+    } else {
+      if (claimedPhone === undefined)
+        throw new AppException('VALIDATION_FAILED', 422, 'phone is required', [
+          { field: 'phone', issue: 'phone is required with a code' },
+        ]);
+      phone = claimedPhone;
+      const challengeId = await this.otp.check(phone, method.code);
+      await this.prisma.otpChallenge.updateMany({
+        where: { id: challengeId, consumedAt: null },
+        data: { consumedAt: new Date() },
+      });
+    }
     const marked = await this.prisma.user.updateMany({
       where: {
         phone,

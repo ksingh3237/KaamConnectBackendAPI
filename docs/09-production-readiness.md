@@ -210,7 +210,7 @@ MSG91 sender exists (Phase 8, blocked on DLT approval).
 | 9 | `REALTIME_CORS_ORIGINS` empty (the native app sends no `Origin`) unless a web client is added | |
 | 9a | `USER_RATE_LIMIT_PER_MIN` (default 240; only once the per-user layer of 1.4 is merged) | Leave at the default until real traffic shows otherwise |
 | 10 | Business settings reviewed: `JOB_OPEN_TTL_HOURS` (24), `DIRECT_ACCEPT_TTL_MIN` (10), `COMMISSION_BENCHMARK_RATE` (0.20, disclosed in the app), booking settings (defaults) | **Per-service durations and the 13 area coordinates are still empty** (Q-18, D-14): matching falls back to same-city and every job is 90 minutes |
-| 11 | Node 20.19 or newer (`engines`) | |
+| 11 | Node 22 or newer (`engines`; `firebase-admin` 14 requires it) | |
 | 12 | Time zone: the database session is pinned to UTC by the app's adapter; **PgBouncer in transaction mode would drop that pin** unless startup `options` are allowed (K-13) | Do not put PgBouncer in front without checking |
 | 13 | Logs go to a durable sink with access control; they are masked (phones, tokens) and carry a request id, but still contain user ids and masked IPs | Retention period to be set |
 | 14 | Backups on, point-in-time recovery on if the host offers it, and a restore **drill** done once (section 3 of the runbook) | Not yet done anywhere |
