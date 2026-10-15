@@ -10,6 +10,7 @@ import { referenceOf } from '../../common/utils/reference.js';
 import { JobStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { OCCUPYING_STATUSES } from './booking-window.js';
+import { placeName } from '../../common/utils/place.js';
 
 export class ScheduleQueryDto {
   /** Only bookings that end after this time (default: now). */
@@ -96,7 +97,7 @@ export class ScheduleController {
               title: r.title,
               status: r.status,
               category: { id: r.category.id, title: r.category.titleEn },
-              areaName: r.area.name,
+              areaName: placeName(r.localityName, r.area.name),
               cityName: r.area.city.name,
               scheduledFor: r.scheduledFor?.toISOString() ?? null,
               startAt: r.bookedStartAt.toISOString(),

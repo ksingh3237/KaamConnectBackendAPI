@@ -10,6 +10,7 @@ import {
 } from '../jobs/state/job-state-machine.js';
 import type { WorkerJobsQueryDto } from './dto/fulfilment.dto.js';
 import { totalOf } from './job-access.js';
+import { placeName } from '../../common/utils/place.js';
 
 /** The worker's Activity screen only lists jobs the worker was actually given. */
 const WORKER_TAB_STATUSES: Record<JobTab, JobStatus[]> = {
@@ -105,7 +106,7 @@ export class WorkerJobsService {
         title: job.title,
         status: job.status,
         category: { id: job.category.id, title: job.category.titleEn },
-        area: job.area.name,
+        area: placeName(job.localityName, job.area.name),
         city: job.area.city.name,
         customerName: job.customer.fullName,
         scheduledFor: job.scheduledFor?.toISOString() ?? null,

@@ -6,6 +6,7 @@ import type { Prisma } from '../../generated/prisma/client.js';
 import { MediaPurpose } from '../media/media-rules.js';
 import { MediaService } from '../media/media.service.js';
 import { coverageOf, type Spot } from '../matching/matching.service.js';
+import { placeName } from '../../common/utils/place.js';
 
 /** Everything needed to draw a worker on a customer's screen (Home list, compare-offers, tracking). */
 export const cardInclude = {
@@ -79,7 +80,7 @@ export class WorkerCardService {
       name: profile.fullName,
       trade: trade?.category.titleEn ?? '',
       tradeId: trade?.categoryId ?? '',
-      areaName: profile.baseArea.name,
+      areaName: placeName(profile.localityName, profile.baseArea.name),
       cityName: profile.baseArea.city.name,
       distanceKm,
       rating: ratingAverage(profile.ratingSum, profile.reviewCount),

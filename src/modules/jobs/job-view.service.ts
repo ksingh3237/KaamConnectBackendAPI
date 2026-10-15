@@ -23,6 +23,7 @@ import {
   type WorkerCard,
 } from '../workers/worker-card.service.js';
 import type { LeadPayload } from '../realtime/events.js';
+import { placeName } from '../../common/utils/place.js';
 
 /**
  * Everything the job screens need EXCEPT the number of quotes. For one job the quote count is cheap
@@ -83,6 +84,8 @@ export interface JobView {
   booking: { startAt: string; endAt: string; confirmedAt: string } | null;
   category: { id: string; title: { en: string; hi: string; pa: string } };
   area: { id: number; name: string };
+  /** The locality the customer typed when their pocket is not in the sector list; null otherwise. */
+  locality: string | null;
   city: { id: number; name: string };
   isDirect: boolean;
   expiresAt: string | null;
@@ -185,6 +188,7 @@ export class JobViewService {
         },
       },
       area: { id: job.area.id, name: job.area.name },
+      locality: job.localityName,
       city: { id: job.area.city.id, name: job.area.city.name },
       isDirect: job.targetWorkerId !== null,
       expiresAt: job.expiresAt?.toISOString() ?? null,
@@ -303,7 +307,7 @@ export function leadPayloadOf(
     id: job.id,
     title: job.title,
     categoryId: job.categoryId,
-    areaName: job.area.name,
+    areaName: placeName(job.localityName, job.area.name),
     distanceKm,
     urgency: job.timing,
     postedAt: job.createdAt.toISOString(),

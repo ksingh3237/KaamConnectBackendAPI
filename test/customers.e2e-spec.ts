@@ -58,6 +58,7 @@ describe('customer profile and addresses (e2e, real PostgreSQL)', () => {
         {
           id: expect.any(String),
           area: { id: areaId, name: 'Sector 15' },
+          locality: null, // a listed sector: no typed locality
           city: { id: expect.any(Number), name: 'Chandigarh' },
           line: 'House #1402, Near Subhash Park',
           lat: null,

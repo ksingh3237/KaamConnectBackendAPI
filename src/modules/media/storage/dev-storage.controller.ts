@@ -64,15 +64,19 @@ export class DevStorageController {
         'Upload link is invalid or has expired',
       );
     }
-    // S3 enforces both of these through the signature; mirror that here.
-    if (req.headers['content-type'] !== contentType) {
+    // S3 enforces both of these through the signature; mirror that here. Clients may add parameters
+    // ("image/jpeg; charset=utf-8") or change the case, so only the media type itself is compared.
+    if (mediaType(req.headers['content-type']) !== mediaType(contentType)) {
       throw new AppException(
         'FORBIDDEN',
         403,
         'Content-Type does not match the upload link',
       );
     }
-    if (Number(req.headers['content-length']) !== declaredLength) {
+    // Some clients (React Native on Android for file bodies) stream the upload chunked, without a
+    // Content-Length. Then the byte counter below is the size check; a length that IS sent must match.
+    const sentLength = req.headers['content-length'];
+    if (sentLength !== undefined && Number(sentLength) !== declaredLength) {
       throw new AppException(
         'FORBIDDEN',
         403,
@@ -145,6 +149,11 @@ export class DevStorageController {
     if (!(this.storage instanceof LocalStorageService)) throw notFound();
     return this.storage;
   }
+}
+
+/** "Image/JPEG; charset=utf-8" -> "image/jpeg". */
+function mediaType(value: string | undefined): string {
+  return (value ?? '').split(';')[0].trim().toLowerCase();
 }
 
 /** Express 5 returns a wildcard as an array of segments. Reject anything that is not our key shape. */

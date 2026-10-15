@@ -113,7 +113,10 @@ export class MatchingService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Verified workers offering this trade who serve this spot, excluding the customer themself. */
+  /**
+   * Verified workers offering this trade who serve this spot and are taking jobs (isAvailable), excluding the customer
+   * themself. Used for "who do I notify": a worker who switched themselves off gets no new-lead pushes.
+   */
   async findCoveringWorkers(input: {
     categoryId: string;
     customerId?: string;
@@ -122,6 +125,7 @@ export class MatchingService {
     const workers = await this.prisma.workerProfile.findMany({
       where: {
         verificationStatus: VerificationStatus.VERIFIED,
+        isAvailable: true,
         trades: { some: { categoryId: input.categoryId } },
         ...(input.customerId ? { userId: { not: input.customerId } } : {}),
       },

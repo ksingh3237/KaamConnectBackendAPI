@@ -28,6 +28,27 @@ const productionEnv = {
 };
 
 describe('validateEnv', () => {
+  describe('MSG91 widget sign-in', () => {
+    const dev = { ...SECRETS, DATABASE_URL: DEV_URL };
+
+    it('is off by default and needs no authkey', () => {
+      expect(validateEnv(dev).MSG91_WIDGET_ENABLED).toBe(false);
+    });
+
+    it('refuses to be switched on without the server-side authkey', () => {
+      expect(() =>
+        validateEnv({ ...dev, MSG91_WIDGET_ENABLED: 'true' }),
+      ).toThrow(/MSG91_AUTHKEY is required/);
+      expect(
+        validateEnv({
+          ...dev,
+          MSG91_WIDGET_ENABLED: 'true',
+          MSG91_AUTHKEY: 'k'.repeat(20),
+        }).MSG91_WIDGET_ENABLED,
+      ).toBe(true);
+    });
+  });
+
   it('applies safe defaults when only DATABASE_URL is given', () => {
     const env = validateEnv({ ...SECRETS, DATABASE_URL: DEV_URL });
     expect(env).toMatchObject({

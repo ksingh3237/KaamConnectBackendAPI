@@ -8,6 +8,7 @@ import { IN_SERVICE_STATUSES, jobNotFound } from '../fulfilment/job-access.js';
 import type { SosDto } from '../fulfilment/dto/fulfilment.dto.js';
 import type { SosNotification } from './safety-notifier.js';
 import { SosDeliveryService } from './sos-delivery.service.js';
+import { placeName } from '../../common/utils/place.js';
 
 /** A second tap within this long returns the first alert instead of paging the desk again. */
 const REPEAT_WINDOW_MS = 60_000;
@@ -154,7 +155,7 @@ export class SosService {
         location,
         address: {
           line: job.addressLine,
-          area: job.area.name,
+          area: placeName(job.localityName, job.area.name),
           city: job.area.city.name,
         },
       };

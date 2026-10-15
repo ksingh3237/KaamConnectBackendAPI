@@ -28,6 +28,16 @@ export class AddressInputDto {
   @Length(3, 200)
   line!: string;
 
+  /**
+   * Typed by the person when their pocket is not in the list ("Sector 82 JLPL", "Peer Muchalla"). areaId is then the
+   * city's "Other area" (or the nearest listed one); matching uses the area, people see this name.
+   */
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @Length(2, 80)
+  localityName?: string;
+
   // GPS is optional but both-or-neither.
   @ValidateIf(
     (o: AddressInputDto) => o.lat !== undefined || o.lng !== undefined,
@@ -100,6 +110,13 @@ export class UpdateAddressDto {
   @IsInt()
   @Min(1)
   areaId?: number;
+
+  /** Typed locality; `null` clears it. */
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @Length(2, 80)
+  localityName?: string | null;
 
   @IsOptional()
   @Trim()
