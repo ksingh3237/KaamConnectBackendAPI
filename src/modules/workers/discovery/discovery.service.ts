@@ -70,6 +70,7 @@ export class DiscoveryService {
     const candidates = await this.prisma.workerProfile.findMany({
       where: {
         verificationStatus: VerificationStatus.VERIFIED,
+        isAvailable: true, // switched off = not listed for customers
         userId: { not: customerId },
         ...(query.categoryId
           ? { trades: { some: { categoryId: query.categoryId } } }

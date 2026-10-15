@@ -5,6 +5,7 @@ import {
   ArrayUnique,
   Equals,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsIn,
   IsInt,
@@ -78,6 +79,20 @@ export class UpsertWorkerDto {
   @IsInt()
   @Min(1)
   baseAreaId!: number;
+
+  /** Shop / workshop / home: house or shop no., street, landmark. Private: the worker and admins only. */
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @Length(3, 200)
+  addressLine?: string;
+
+  /** Typed locality when the base area is not in the list; baseAreaId is then the city's "Other area". */
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @Length(2, 80)
+  localityName?: string;
 
   @IsIn(ALLOWED_RADII)
   radiusKm!: number;
@@ -157,6 +172,25 @@ export class UpdateWorkerDto {
   @IsInt()
   @Min(1)
   baseAreaId?: number;
+
+  /** Shop / workshop / home: house or shop no., street, landmark. Private: the worker and admins only. */
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @Length(3, 200)
+  addressLine?: string | null;
+
+  /** Typed locality when the base area is not in the list; baseAreaId is then the city's "Other area". */
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @Length(2, 80)
+  localityName?: string | null;
+
+  /** The "taking jobs" switch. */
+  @IsOptional()
+  @IsBoolean()
+  isAvailable?: boolean;
 
   @IsOptional()
   @IsIn(ALLOWED_RADII)

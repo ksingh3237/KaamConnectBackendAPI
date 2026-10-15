@@ -1,3 +1,4 @@
+import { CITIES } from '../prisma/data/locations.js';
 import { seedReferenceData } from '../prisma/seed/reference-data.js';
 import { api, createTestApp, type TestApp } from './helpers/app.js';
 import { loginAs } from './helpers/auth.js';
@@ -31,7 +32,7 @@ describe('catalog API (e2e)', () => {
   });
 
   describe('GET /api/v1/service-categories', () => {
-    it('returns the 8 categories in display order with titles in all three languages', async () => {
+    it('returns the 20 categories in display order with titles in all three languages', async () => {
       const res = await http
         .get(`${V1}/service-categories`, { token })
         .expect(200);
@@ -45,6 +46,18 @@ describe('catalog API (e2e)', () => {
         'cleaner',
         'appliance',
         'car_wash',
+        'vehicle_repair',
+        'ro_service',
+        'tv_repair',
+        'fridge_repair',
+        'packers_movers',
+        'glass_works',
+        'generator_service',
+        'gardening',
+        'computer_it',
+        'civil_construction',
+        'catering_food',
+        'cctv_security',
       ]);
       expect(res.body[1]).toEqual({
         id: 'plumber',
@@ -65,7 +78,7 @@ describe('catalog API (e2e)', () => {
       const res = await http
         .get(`${V1}/service-categories`, { token })
         .expect(200);
-      expect(res.body).toHaveLength(7);
+      expect(res.body).toHaveLength(19);
       expect(res.body.map((c: { id: string }) => c.id)).not.toContain(
         'painter',
       );
@@ -98,25 +111,23 @@ describe('catalog API (e2e)', () => {
         res.body
           .find((c: { name: string }) => c.name === city)
           .areas.map((a: { name: string }) => a.name);
-      expect(names('Chandigarh')).toEqual([
+      // every city returns its whole seeded list, the original app areas first
+      for (const city of CITIES) {
+        expect(names(city.name)).toEqual(city.areas.map((a) => a.name));
+      }
+      expect(names('Chandigarh').slice(0, 5)).toEqual([
         'Sector 15',
         'Sector 17',
         'Sector 22',
         'Sector 35',
         'Sector 43',
       ]);
-      expect(names('Mohali (SAS Nagar)')).toEqual([
-        'Phase 3B2',
-        'Phase 5',
-        'Phase 7',
-        'Sector 70',
-      ]);
-      expect(names('Panchkula')).toEqual([
-        'Sector 5',
-        'Sector 11',
-        'Sector 20',
-        'MDC Sector 4',
-      ]);
+      expect(names('Mohali (SAS Nagar)')).toEqual(
+        expect.arrayContaining(['Phase 7', 'Sector 70', 'Zirakpur', 'Kharar']),
+      );
+      expect(names('Panchkula')).toEqual(
+        expect.arrayContaining(['Sector 11', 'MDC Sector 4']),
+      );
     });
 
     it('exposes only ids and names (no coordinates or internals)', async () => {

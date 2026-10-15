@@ -85,6 +85,7 @@ export class LeadCatchUpService implements OnModuleInit {
       where: {
         userId: change.workerId,
         verificationStatus: VerificationStatus.VERIFIED,
+        isAvailable: true, // switched off: no catch-up pushes either
       },
       select: { ...workerGeoSelect, trades: { select: { categoryId: true } } },
     });

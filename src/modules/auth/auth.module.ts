@@ -6,6 +6,10 @@ import { AuthCleanupService } from './auth-cleanup.service.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
+import {
+  Msg91HttpTokenVerifier,
+  Msg91TokenVerifier,
+} from './msg91/msg91-token-verifier.js';
 import { OtpService } from './otp.service.js';
 import { otpSenderProvider } from './sms/otp-sender.provider.js';
 import { TokenService } from './token.service.js';
@@ -27,6 +31,7 @@ import { TokenService } from './token.service.js';
     AuthCleanupService,
     JwtAuthGuard,
     otpSenderProvider,
+    { provide: Msg91TokenVerifier, useClass: Msg91HttpTokenVerifier },
   ],
   // JwtAuthGuard is registered globally from AppModule (after the throttler guard).
   exports: [JwtAuthGuard, TokenService, OtpService],

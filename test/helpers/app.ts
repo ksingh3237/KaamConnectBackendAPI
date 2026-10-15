@@ -5,6 +5,8 @@ import { AppModule } from '../../src/app.module.js';
 import { configureApp } from '../../src/app.setup.js';
 import { USER_RATE_LIMIT } from '../../src/common/throttle/user-throttler.guard.js';
 import type { OtpChannel } from '../../src/generated/prisma/enums.js';
+import { AppException } from '../../src/common/exceptions/app.exception.js';
+import { Msg91TokenVerifier } from '../../src/modules/auth/msg91/msg91-token-verifier.js';
 import { OtpSender } from '../../src/modules/auth/sms/otp-sender.js';
 import {
   SafetyNotifier,
@@ -40,6 +42,34 @@ export class RecordingOtpSender extends OtpSender {
   }
 }
 
+/**
+ * Stands in for MSG91's token check. `issue(phone)` mints a token that verifies to that number; anything else is
+ * refused the way the real verifier refuses (OTP_INVALID), so tests cannot pass with a made-up token.
+ */
+export class FakeMsg91Verifier extends Msg91TokenVerifier {
+  private readonly issued = new Map<string, string>();
+  down = false;
+  calls = 0;
+
+  issue(phone: string): string {
+    const token = `fake-msg91-token-${this.issued.size}-${phone.slice(-4)}-xxxxxxxx`;
+    this.issued.set(token, phone);
+    return token;
+  }
+
+  verify(accessToken: string): Promise<string> {
+    this.calls += 1;
+    if (this.down)
+      return Promise.reject(
+        new AppException('OTP_PROVIDER_UNAVAILABLE', 503, 'down'),
+      );
+    const phone = this.issued.get(accessToken);
+    if (!phone)
+      return Promise.reject(new AppException('OTP_INVALID', 401, 'invalid'));
+    return Promise.resolve(phone);
+  }
+}
+
 /** Stands in for the safety desk: remembers every SOS it was asked to deliver. */
 export class RecordingSafetyNotifier extends SafetyNotifier {
   sent: SosNotification[] = [];
@@ -63,6 +93,7 @@ export interface TestApp {
   app: INestApplication;
   prisma: PrismaService;
   sender: RecordingOtpSender;
+  msg91: FakeMsg91Verifier;
   safety: RecordingSafetyNotifier;
   close: () => Promise<void>;
 }
@@ -85,6 +116,7 @@ export async function createTestApp(
 ): Promise<TestApp> {
   const sender = new RecordingOtpSender();
   const safety = new RecordingSafetyNotifier();
+  const msg91 = new FakeMsg91Verifier();
   let builder = Test.createTestingModule({ imports: [AppModule] });
   if (options.userRateLimitPerMin !== undefined)
     builder = builder
@@ -93,6 +125,8 @@ export async function createTestApp(
   const moduleRef = await builder
     .overrideProvider(OtpSender)
     .useValue(sender)
+    .overrideProvider(Msg91TokenVerifier)
+    .useValue(msg91)
     .overrideProvider(SafetyNotifier)
     .useValue(safety)
     .overrideProvider(WORKER_VERIFICATION_MODE)
@@ -110,6 +144,7 @@ export async function createTestApp(
     app,
     prisma: app.get(PrismaService),
     sender,
+    msg91,
     safety,
     close: () => app.close(),
   };

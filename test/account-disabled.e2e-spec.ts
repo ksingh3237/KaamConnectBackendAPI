@@ -140,7 +140,7 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
 
   it('finds the routes it is meant to probe (so the test cannot pass by finding nothing)', () => {
     const protectedRoutes = routes.filter((r) => !r.isPublic);
-    expect(routes.length).toBe(73);
+    expect(routes.length).toBe(74);
     expect(protectedRoutes.length).toBeGreaterThanOrEqual(50);
     expect(
       protectedRoutes
@@ -173,6 +173,8 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
         'GET /health/ready',
         'POST /auth/otp/request',
         'POST /auth/otp/verify',
+        // MSG91 widget sign-in: the proof is MSG91's access token, checked with MSG91, not a session.
+        'POST /auth/msg91/verify',
         'POST /auth/refresh',
         // A disabled person cannot hold a session, so asking for deletion must work without one (docs/08 Door B).
         'POST /auth/deletion-requests',

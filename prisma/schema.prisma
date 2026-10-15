@@ -53,12 +53,12 @@ enum LeadResponse {
 }
 
 enum JobStatus {
-  OPEN           // broadcast, receiving offers
-  ASSIGNED       // offer accepted, worker en route
-  ARRIVED        // arrival code verified
-  IN_PROGRESS    // bill approved by customer, work under way
+  OPEN // broadcast, receiving offers
+  ASSIGNED // offer accepted, worker en route
+  ARRIVED // arrival code verified
+  IN_PROGRESS // bill approved by customer, work under way
   WORK_COMPLETED // ready for direct settlement
-  COMPLETED      // payment recorded
+  COMPLETED // payment recorded
   CANCELLED
 }
 
@@ -71,7 +71,7 @@ enum CancelledBy {
 enum OfferStatus {
   PENDING
   ACCEPTED
-  REJECTED  // another offer was accepted
+  REJECTED // another offer was accepted
   WITHDRAWN
 }
 
@@ -96,7 +96,7 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   MARKED_PAID // customer tapped "Paid"
-  CONFIRMED   // worker confirmed receipt (optional; no UI yet)
+  CONFIRMED // worker confirmed receipt (optional; no UI yet)
 }
 
 enum ReviewTag {
@@ -122,24 +122,24 @@ enum SosStatus {
 // ───────────────────────── Identity & auth ─────────────────────────
 
 model User {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  phone     String   @unique @db.VarChar(15) // E.164, e.g. +919876543210
-  language  Language @default(en)
-  isAdmin   Boolean  @default(false) @map("is_admin") // ASSUMPTION A-7: minimal worker-verification admin
-  isActive  Boolean  @default(true) @map("is_active")
-  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3)            // set once the account has been anonymised (docs/08 s1); never cleared
+  id                  String    @id @default(uuid(7)) @db.Uuid
+  phone               String    @unique @db.VarChar(15) // E.164, e.g. +919876543210
+  language            Language  @default(en)
+  isAdmin             Boolean   @default(false) @map("is_admin") // ASSUMPTION A-7: minimal worker-verification admin
+  isActive            Boolean   @default(true) @map("is_active")
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3) // set once the account has been anonymised (docs/08 s1); never cleared
   deletionRequestedAt DateTime? @map("deletion_requested_at") @db.Timestamptz(3) // a disabled person asked for deletion; waits for an admin
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  customer      CustomerProfile?
-  worker        WorkerProfile?   @relation("WorkerUser")
-  reviewedWorkers WorkerProfile[] @relation("WorkerReviewer")
-  refreshTokens RefreshToken[]
-  sosAlerts     SosAlert[] @relation("SosRaiser")
-  acknowledgedSos SosAlert[] @relation("SosAcknowledger")
-  resolvedSos     SosAlert[] @relation("SosResolver")
-  securityEvents JobSecurityEvent[]
+  customer        CustomerProfile?
+  worker          WorkerProfile?     @relation("WorkerUser")
+  reviewedWorkers WorkerProfile[]    @relation("WorkerReviewer")
+  refreshTokens   RefreshToken[]
+  sosAlerts       SosAlert[]         @relation("SosRaiser")
+  acknowledgedSos SosAlert[]         @relation("SosAcknowledger")
+  resolvedSos     SosAlert[]         @relation("SosResolver")
+  securityEvents  JobSecurityEvent[]
 
   // Hand-written in the account_deletion_and_sos_delivery migration (Prisma cannot express it), keep it there:
   //  - users_deletion_requested_idx: (deletion_requested_at) WHERE deletion_requested_at IS NOT NULL AND deleted_at IS NULL
@@ -165,7 +165,7 @@ model RefreshToken {
   id        String    @id @default(uuid(7)) @db.Uuid
   userId    String    @map("user_id") @db.Uuid
   familyId  String    @map("family_id") @db.Uuid // rotation family, for reuse detection
-  tokenHash String    @unique @map("token_hash")  // SHA-256 of the opaque token
+  tokenHash String    @unique @map("token_hash") // SHA-256 of the opaque token
   expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
   revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -205,18 +205,18 @@ model Area {
 
 // Stable string key kept from the frontend (electrician, plumber, ac_repair, ...). Never renamed.
 model ServiceCategory {
-  id            String  @id
-  titleEn       String  @map("title_en")
-  titleHi       String  @map("title_hi")
-  titlePa       String  @map("title_pa")
-  iconKey       String  @map("icon_key") // lucide icon name used by the app
-  color         String  @db.VarChar(7)
-  bgColor       String  @map("bg_color") @db.VarChar(7)
-  baseVisitFee  Int     @map("base_visit_fee") // INR, shown as "₹200 visit"
-  defaultDurationMin Int? @map("default_duration_min") // CHECK BETWEEN 15 AND 480; null = BOOKING_DEFAULT_DURATION_MIN (decision D-14)
-  examples      String
-  sortOrder     Int     @default(0) @map("sort_order")
-  isActive      Boolean @default(true) @map("is_active")
+  id                 String  @id
+  titleEn            String  @map("title_en")
+  titleHi            String  @map("title_hi")
+  titlePa            String  @map("title_pa")
+  iconKey            String  @map("icon_key") // lucide icon name used by the app
+  color              String  @db.VarChar(7)
+  bgColor            String  @map("bg_color") @db.VarChar(7)
+  baseVisitFee       Int     @map("base_visit_fee") // INR, shown as "₹200 visit"
+  defaultDurationMin Int?    @map("default_duration_min") // CHECK BETWEEN 15 AND 480; null = BOOKING_DEFAULT_DURATION_MIN (decision D-14)
+  examples           String
+  sortOrder          Int     @default(0) @map("sort_order")
+  isActive           Boolean @default(true) @map("is_active")
 
   workers WorkerTrade[]
   jobs    Job[]
@@ -244,15 +244,16 @@ model CustomerProfile {
 }
 
 model Address {
-  id         String   @id @default(uuid(7)) @db.Uuid
-  customerId String   @map("customer_id") @db.Uuid
-  areaId     Int      @map("area_id")
-  line       String   @db.VarChar(200) // "House #1402, Near Subhash Park" - private until a worker is assigned
-  lat        Float?
-  lng        Float?
-  isPrimary  Boolean  @default(false) @map("is_primary")
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id           String   @id @default(uuid(7)) @db.Uuid
+  customerId   String   @map("customer_id") @db.Uuid
+  areaId       Int      @map("area_id")
+  line         String   @db.VarChar(200) // "House #1402, Near Subhash Park" - private until a worker is assigned
+  localityName String?  @map("locality_name") @db.VarChar(80) // typed by the person when their pocket is not in the list ("Sector 82 JLPL"); area_id is then the city's "Other area"
+  lat          Float?
+  lng          Float?
+  isPrimary    Boolean  @default(false) @map("is_primary")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   customer CustomerProfile @relation(fields: [customerId], references: [userId], onDelete: Cascade)
   area     Area            @relation(fields: [areaId], references: [id])
@@ -270,35 +271,38 @@ model WorkerProfile {
   baseAreaId         Int                @map("base_area_id")
   radiusKm           Int                @default(6) @map("radius_km") // CHECK IN (3,6,12)
   scheduledRadiusKm  Int?               @map("scheduled_radius_km") // CHECK IN (3,6,12,25,50): how far the worker will travel for future jobs; null = same as radius_km. Matching uses max(radius_km, this)
-  experienceYears    Int                @map("experience_years")      // CHECK BETWEEN 1 AND 40
+  experienceYears    Int                @map("experience_years") // CHECK BETWEEN 1 AND 40
   languages          Language[]
   skills             String[]
-  visitingFee        Int?               @map("visiting_fee")  // OPEN Q-6: default fee shown on discovery cards
-  vehicle            String?            @db.VarChar(80)       // shown on tracking screen; not collected in UI yet
+  visitingFee        Int?               @map("visiting_fee") // OPEN Q-6: default fee shown on discovery cards
+  vehicle            String?            @db.VarChar(80) // shown on tracking screen; not collected in UI yet
   upiId              String?            @map("upi_id") @db.VarChar(80) // needed for the pay-by-UPI QR; not collected in UI yet
-  badge              String?            @db.VarChar(60)       // admin-assigned label e.g. "Govt Certified Pro"
+  addressLine        String?            @map("address_line") @db.VarChar(200) // shop / workshop / home address; private (shown to the worker and admins only)
+  localityName       String?            @map("locality_name") @db.VarChar(80) // typed locality when the base area is not in the list
+  isAvailable        Boolean            @default(true) @map("is_available") // "taking jobs" switch: off = no new-lead notifications, hidden from discovery, no direct bookings
+  badge              String?            @db.VarChar(60) // admin-assigned label e.g. "Govt Certified Pro"
   verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
   verifiedAt         DateTime?          @map("verified_at") @db.Timestamptz(3)
   reviewedAt         DateTime?          @map("reviewed_at") @db.Timestamptz(3) // when an admin (or the dev auto-approval) last decided VERIFIED or REJECTED; null = pending or unknown. D-9 counts retention from here
   reviewedById       String?            @map("reviewed_by") @db.Uuid // the admin who decided; null for the dev auto-approval and for decisions made before this column existed (never guessed)
   rejectionReason    String?            @map("rejection_reason")
   termsAcceptedAt    DateTime           @map("terms_accepted_at") @db.Timestamptz(3)
-  ratingSum          Int                @default(0) @map("rating_sum")   // avg = ratingSum / reviewCount
+  ratingSum          Int                @default(0) @map("rating_sum") // avg = ratingSum / reviewCount
   reviewCount        Int                @default(0) @map("review_count")
   createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  user       User            @relation("WorkerUser", fields: [userId], references: [id], onDelete: Cascade)
-  reviewedBy User?           @relation("WorkerReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
-  baseArea  Area             @relation(fields: [baseAreaId], references: [id])
-  trades    WorkerTrade[]
-  documents WorkerDocument[]
-  location  WorkerLocation?
-  offers    Offer[]
-  jobs         Job[] @relation("JobAssignedWorker")
-  directJobs   Job[] @relation("JobTargetWorker")
-  reviews   Review[]
-  leads     WorkerLead[]
+  user       User             @relation("WorkerUser", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?            @relation("WorkerReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  baseArea   Area             @relation(fields: [baseAreaId], references: [id])
+  trades     WorkerTrade[]
+  documents  WorkerDocument[]
+  location   WorkerLocation?
+  offers     Offer[]
+  jobs       Job[]            @relation("JobAssignedWorker")
+  directJobs Job[]            @relation("JobTargetWorker")
+  reviews    Review[]
+  leads      WorkerLead[]
 
   @@index([baseAreaId, verificationStatus])
   @@map("worker_profiles")
@@ -345,55 +349,56 @@ model WorkerLocation {
 // ───────────────────────── Jobs ─────────────────────────
 
 model Job {
-  id              String      @id @default(uuid(7)) @db.Uuid
-  jobNumber       Int         @unique @default(autoincrement()) @map("job_number") // shown as KC-<n>; sequence starts at 10000
-  customerId      String      @map("customer_id") @db.Uuid
-  categoryId      String      @map("category_id")
-  title           String      @db.VarChar(120)
-  description     String?     @db.VarChar(1000)
-  timing          JobTiming
-  scheduledFor    DateTime?   @map("scheduled_for") @db.Timestamptz(3) // requested appointment start; null = as soon as possible
-  durationMin     Int         @default(90) @map("duration_min")          // CHECK BETWEEN 15 AND 480; length of the booking window
-  bookedStartAt   DateTime?   @map("booked_start_at") @db.Timestamptz(3) // the worker's reserved window, set when the booking is confirmed
-  bookedEndAt     DateTime?   @map("booked_end_at") @db.Timestamptz(3)
-  bookingConfirmedAt DateTime? @map("booking_confirmed_at") @db.Timestamptz(3)
-  areaId          Int         @map("area_id")
-  addressLine     String      @map("address_line") @db.VarChar(200) // snapshot; revealed only to the assigned worker
-  lat             Float?
-  lng             Float?
-  status          JobStatus   @default(OPEN)
-  targetWorkerId  String?     @map("target_worker_id") @db.Uuid // set => direct booking (Home "Book Pro"); only this worker sees it and must accept (Q-3)
-  workerId        String?     @map("worker_id") @db.Uuid
-  acceptedOfferId String?     @unique @map("accepted_offer_id") @db.Uuid
-  arrivalCode     String?     @map("arrival_code") @db.VarChar(4)
-  arrivalAttempts Int         @default(0) @map("arrival_attempts")
+  id                 String       @id @default(uuid(7)) @db.Uuid
+  jobNumber          Int          @unique @default(autoincrement()) @map("job_number") // shown as KC-<n>; sequence starts at 10000
+  customerId         String       @map("customer_id") @db.Uuid
+  categoryId         String       @map("category_id")
+  title              String       @db.VarChar(120)
+  description        String?      @db.VarChar(1000)
+  timing             JobTiming
+  scheduledFor       DateTime?    @map("scheduled_for") @db.Timestamptz(3) // requested appointment start; null = as soon as possible
+  durationMin        Int          @default(90) @map("duration_min") // CHECK BETWEEN 15 AND 480; length of the booking window
+  bookedStartAt      DateTime?    @map("booked_start_at") @db.Timestamptz(3) // the worker's reserved window, set when the booking is confirmed
+  bookedEndAt        DateTime?    @map("booked_end_at") @db.Timestamptz(3)
+  bookingConfirmedAt DateTime?    @map("booking_confirmed_at") @db.Timestamptz(3)
+  areaId             Int          @map("area_id")
+  addressLine        String       @map("address_line") @db.VarChar(200) // snapshot; revealed only to the assigned worker
+  localityName       String?      @map("locality_name") @db.VarChar(80) // snapshot of the address's typed locality; public like the area
+  lat                Float?
+  lng                Float?
+  status             JobStatus    @default(OPEN)
+  targetWorkerId     String?      @map("target_worker_id") @db.Uuid // set => direct booking (Home "Book Pro"); only this worker sees it and must accept (Q-3)
+  workerId           String?      @map("worker_id") @db.Uuid
+  acceptedOfferId    String?      @unique @map("accepted_offer_id") @db.Uuid
+  arrivalCode        String?      @map("arrival_code") @db.VarChar(4)
+  arrivalAttempts    Int          @default(0) @map("arrival_attempts")
   arrivalCodeResets  Int          @default(0) @map("arrival_code_resets") // customer resets used for this assignment; CHECK >= 0, capped in code (MAX_ARRIVAL_CODE_RESETS)
   arrivalCodeResetAt DateTime?    @map("arrival_code_reset_at") @db.Timestamptz(3) // last reset, for the cooldown
-  expiresAt       DateTime?   @map("expires_at") @db.Timestamptz(3) // OPEN jobs auto-cancel (ASSUMPTION A-9)
-  assignedAt      DateTime?   @map("assigned_at") @db.Timestamptz(3)
-  arrivedAt       DateTime?   @map("arrived_at") @db.Timestamptz(3)
-  costApprovedAt  DateTime?   @map("cost_approved_at") @db.Timestamptz(3)
-  workCompletedAt DateTime?   @map("work_completed_at") @db.Timestamptz(3)
-  completedAt     DateTime?   @map("completed_at") @db.Timestamptz(3)
-  cancelledAt     DateTime?   @map("cancelled_at") @db.Timestamptz(3)
-  cancelledBy     CancelledBy? @map("cancelled_by")
-  cancelReason    String?     @map("cancel_reason") @db.VarChar(300)
-  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  expiresAt          DateTime?    @map("expires_at") @db.Timestamptz(3) // OPEN jobs auto-cancel (ASSUMPTION A-9)
+  assignedAt         DateTime?    @map("assigned_at") @db.Timestamptz(3)
+  arrivedAt          DateTime?    @map("arrived_at") @db.Timestamptz(3)
+  costApprovedAt     DateTime?    @map("cost_approved_at") @db.Timestamptz(3)
+  workCompletedAt    DateTime?    @map("work_completed_at") @db.Timestamptz(3)
+  completedAt        DateTime?    @map("completed_at") @db.Timestamptz(3)
+  cancelledAt        DateTime?    @map("cancelled_at") @db.Timestamptz(3)
+  cancelledBy        CancelledBy? @map("cancelled_by")
+  cancelReason       String?      @map("cancel_reason") @db.VarChar(300)
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  customer      CustomerProfile @relation(fields: [customerId], references: [userId])
-  worker        WorkerProfile?  @relation("JobAssignedWorker", fields: [workerId], references: [userId])
-  targetWorker  WorkerProfile?  @relation("JobTargetWorker", fields: [targetWorkerId], references: [userId])
-  category      ServiceCategory @relation(fields: [categoryId], references: [id])
-  area          Area            @relation(fields: [areaId], references: [id])
-  acceptedOffer Offer?          @relation("JobAcceptedOffer", fields: [acceptedOfferId], references: [id])
-  offers        Offer[]         @relation("JobOffers")
-  media         JobMedia[]
-  billItems     BillItem[]
-  payment       Payment?
-  review        Review?
-  sosAlerts     SosAlert[]
-  workerLeads   WorkerLead[]
+  customer       CustomerProfile    @relation(fields: [customerId], references: [userId])
+  worker         WorkerProfile?     @relation("JobAssignedWorker", fields: [workerId], references: [userId])
+  targetWorker   WorkerProfile?     @relation("JobTargetWorker", fields: [targetWorkerId], references: [userId])
+  category       ServiceCategory    @relation(fields: [categoryId], references: [id])
+  area           Area               @relation(fields: [areaId], references: [id])
+  acceptedOffer  Offer?             @relation("JobAcceptedOffer", fields: [acceptedOfferId], references: [id])
+  offers         Offer[]            @relation("JobOffers")
+  media          JobMedia[]
+  billItems      BillItem[]
+  payment        Payment?
+  review         Review?
+  sosAlerts      SosAlert[]
+  workerLeads    WorkerLead[]
   securityEvents JobSecurityEvent[]
 
   // Hand-written in the scheduling migration (Prisma cannot express them), keep them there:
@@ -404,10 +409,10 @@ model Job {
   // Hand-written in the arrival_code_reset migration (Prisma cannot express it), keep it there:
   //  - jobs_arrival_code_resets_nonneg: CHECK (arrival_code_resets >= 0). The cap of 3 resets and the 60 s cooldown live in code.
   @@index([status, categoryId, areaId, createdAt]) // worker lead feed
-  @@index([customerId, status, createdAt])         // customer "My Jobs" tabs
-  @@index([workerId, status, createdAt])           // worker "My Jobs" tabs / earnings
-  @@index([targetWorkerId, status])                // direct requests waiting for a worker
-  @@index([status, expiresAt])                     // expiry sweeper
+  @@index([customerId, status, createdAt]) // customer "My Jobs" tabs
+  @@index([workerId, status, createdAt]) // worker "My Jobs" tabs / earnings
+  @@index([targetWorkerId, status]) // direct requests waiting for a worker
+  @@index([status, expiresAt]) // expiry sweeper
   @@map("jobs")
 }
 
@@ -486,7 +491,7 @@ model BillItem {
   jobId       String       @map("job_id") @db.Uuid
   kind        BillItemKind
   description String       @db.VarChar(120)
-  amount      Int          // INR; CHECK >= 0
+  amount      Int // INR; CHECK >= 0
   createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
@@ -500,7 +505,7 @@ model Payment {
   id          String        @id @default(uuid(7)) @db.Uuid
   jobId       String        @unique @map("job_id") @db.Uuid
   method      PaymentMethod
-  amount      Int           // total at time of marking (sum of bill items); CHECK > 0
+  amount      Int // total at time of marking (sum of bill items); CHECK > 0
   status      PaymentStatus @default(MARKED_PAID)
   markedAt    DateTime      @default(now()) @map("marked_at") @db.Timestamptz(3)
   confirmedAt DateTime?     @map("confirmed_at") @db.Timestamptz(3)
@@ -516,7 +521,7 @@ model Review {
   jobId      String      @unique @map("job_id") @db.Uuid
   customerId String      @map("customer_id") @db.Uuid
   workerId   String      @map("worker_id") @db.Uuid
-  rating     Int         // CHECK BETWEEN 1 AND 5
+  rating     Int // CHECK BETWEEN 1 AND 5
   tags       ReviewTag[]
   tipAmount  Int         @default(0) @map("tip_amount") // recorded intent; paid off-platform (OPEN Q-8)
   createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -539,9 +544,9 @@ model SosAlert {
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   // Delivery to the safety desk. The alert row is written first; these columns record whether the desk got it.
-  payload           Json?     // exactly what the desk is sent (contains names, phones and the address: removed when the person is deleted); null on rows from before this column
+  payload           Json? // exactly what the desk is sent (contains names, phones and the address: removed when the person is deleted); null on rows from before this column
   deliveredAt       DateTime? @map("delivered_at") @db.Timestamptz(3) // null = the desk has not confirmed receipt yet
-  deliveryAttempts  Int       @default(0) @map("delivery_attempts")    // CHECK >= 0
+  deliveryAttempts  Int       @default(0) @map("delivery_attempts") // CHECK >= 0
   lastAttemptAt     DateTime? @map("last_attempt_at") @db.Timestamptz(3)
   lastDeliveryError String?   @map("last_delivery_error") @db.VarChar(200)
   // A human took it on (acknowledged) and closed it (resolved). Who is kept; the admin account may be removed later.

@@ -1,4 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { request as httpRequest, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import request from 'supertest';
 import { MediaService } from '../src/modules/media/media.service.js';
@@ -255,6 +257,67 @@ describe('media uploads (e2e, local storage provider)', () => {
           path.join(TEST_STORAGE_DIR, 'media', ...ordinary.key.split('/')),
         ),
       ).toBe(true);
+    });
+
+    it('accepts a Content-Type with parameters or different case (e.g. "; charset=utf-8")', async () => {
+      const s = await signed();
+      await put(
+        s.uploadUrl,
+        { 'Content-Type': 'Image/JPEG; charset=utf-8' },
+        Buffer.alloc(2048),
+      ).expect(200);
+    });
+
+    // React Native on Android streams file bodies chunked, with no Content-Length header.
+    const putChunked = async (uploadUrl: string, chunks: Buffer[]) => {
+      const server = t.app.getHttpServer() as Server;
+      if (!server.listening)
+        await new Promise<void>((resolve) => server.listen(0, resolve));
+      const { port } = server.address() as AddressInfo;
+      const url = new URL(uploadUrl);
+      return new Promise<number>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port,
+            method: 'PUT',
+            path: url.pathname + url.search,
+            headers: {
+              'Content-Type': 'image/jpeg',
+              'X-Forwarded-For': freshIp(),
+            },
+          },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode ?? 0));
+          },
+        );
+        req.on('error', reject);
+        for (const c of chunks) req.write(c);
+        req.end();
+      });
+    };
+
+    it('accepts a chunked upload with no Content-Length when the bytes match the link', async () => {
+      const s = await signed(2048);
+      expect(
+        await putChunked(s.uploadUrl, [Buffer.alloc(1000), Buffer.alloc(1048)]),
+      ).toBe(200);
+      const file = path.join(TEST_STORAGE_DIR, 'media', ...s.key.split('/'));
+      expect(readFileSync(file).length).toBe(2048);
+    });
+
+    it('refuses a chunked upload whose bytes do not match the link, and keeps nothing', async () => {
+      const big = await signed(2048);
+      expect(
+        await putChunked(big.uploadUrl, [Buffer.alloc(2048), Buffer.alloc(1)]),
+      ).toBe(400);
+      const small = await signed(2048);
+      expect(await putChunked(small.uploadUrl, [Buffer.alloc(100)])).toBe(400);
+      for (const s of [big, small]) {
+        const file = path.join(TEST_STORAGE_DIR, 'media', ...s.key.split('/'));
+        expect(existsSync(file)).toBe(false);
+      }
     });
 
     it('refuses an upload whose Content-Type differs from what was approved', async () => {

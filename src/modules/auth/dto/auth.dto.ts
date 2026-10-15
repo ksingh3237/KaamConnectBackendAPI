@@ -20,6 +20,13 @@ export class VerifyOtpDto {
   code!: string;
 }
 
+export class Msg91VerifyDto {
+  /** The JWT the MSG91 widget returns after a correct OTP (or an invisible verification). Opaque to the app. */
+  @IsString()
+  @Length(20, 4096)
+  accessToken!: string;
+}
+
 export class RefreshTokenDto {
   // Opaque 43-char base64url value; the bounds only stop absurd payloads.
   @IsString()

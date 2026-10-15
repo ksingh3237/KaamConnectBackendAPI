@@ -17,6 +17,8 @@ export const MAX_ADDRESSES = 5;
 export interface AddressView {
   id: string;
   area: { id: number; name: string };
+  /** The locality the person typed, when their pocket is not in the sector list; null otherwise. */
+  locality: string | null;
   city: { id: number; name: string };
   line: string;
   lat: number | null;
@@ -38,6 +40,7 @@ const addressInclude = { area: { include: { city: true } } } as const;
 export function toAddressView(a: {
   id: string;
   line: string;
+  localityName: string | null;
   lat: number | null;
   lng: number | null;
   isPrimary: boolean;
@@ -46,6 +49,7 @@ export function toAddressView(a: {
   return {
     id: a.id,
     area: { id: a.area.id, name: a.area.name },
+    locality: a.localityName,
     city: { id: a.area.city.id, name: a.area.city.name },
     line: a.line,
     lat: a.lat,
@@ -170,11 +174,15 @@ export class CustomersService {
 }
 
 export function addressData(
-  input: Pick<AddressInputDto, 'areaId' | 'line' | 'lat' | 'lng'>,
+  input: Pick<
+    AddressInputDto,
+    'areaId' | 'line' | 'lat' | 'lng' | 'localityName'
+  >,
 ) {
   return {
     areaId: input.areaId,
     line: input.line,
+    localityName: input.localityName || null,
     lat: input.lat ?? null,
     lng: input.lng ?? null,
   };

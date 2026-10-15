@@ -67,7 +67,14 @@ export class AddressesService {
 
     const result = await this.prisma.address.updateMany({
       where: { id, customerId: userId },
-      data: { areaId: dto.areaId, line: dto.line, lat: dto.lat, lng: dto.lng },
+      data: {
+        areaId: dto.areaId,
+        line: dto.line,
+        lat: dto.lat,
+        lng: dto.lng,
+        localityName:
+          dto.localityName === undefined ? undefined : dto.localityName || null,
+      },
     });
     if (result.count === 0) throw notFound();
     return this.getOwned(userId, id);

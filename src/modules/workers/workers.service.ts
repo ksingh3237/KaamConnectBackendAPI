@@ -25,7 +25,13 @@ export interface WorkerView {
   skills: string[];
   languages: Language[];
   baseArea: { id: number; name: string };
+  /** Typed locality when the base area is not in the list; null otherwise. */
+  locality: string | null;
   city: { id: number; name: string };
+  /** Shop / workshop / home address (private). */
+  addressLine: string | null;
+  /** Taking jobs: off = no new-lead notifications, hidden from discovery, no direct bookings. */
+  isAvailable: boolean;
   radiusKm: number;
   /** How far they will travel for future bookings; null = same as radiusKm. */
   scheduledRadiusKm: number | null;
@@ -112,6 +118,8 @@ export class WorkersService {
         visitingFee: dto.visitingFee,
         vehicle: dto.vehicle,
         upiId: dto.upiId,
+        addressLine: dto.addressLine || null,
+        localityName: dto.localityName || null,
       };
       await tx.workerProfile.upsert({
         where: { userId },
@@ -163,6 +171,13 @@ export class WorkersService {
           visitingFee: dto.visitingFee,
           vehicle: dto.vehicle,
           upiId: dto.upiId,
+          addressLine:
+            dto.addressLine === undefined ? undefined : dto.addressLine || null,
+          localityName:
+            dto.localityName === undefined
+              ? undefined
+              : dto.localityName || null,
+          isAvailable: dto.isAvailable,
           ...reviewEffect(existing, dto),
         },
       });
@@ -318,6 +333,9 @@ export class WorkersService {
     visitingFee: number | null;
     vehicle: string | null;
     upiId: string | null;
+    addressLine: string | null;
+    localityName: string | null;
+    isAvailable: boolean;
     badge: string | null;
     verificationStatus: VerificationStatus;
     rejectionReason: string | null;
@@ -343,7 +361,10 @@ export class WorkersService {
       skills: profile.skills,
       languages: profile.languages,
       baseArea: { id: profile.baseArea.id, name: profile.baseArea.name },
+      locality: profile.localityName,
       city: { id: profile.baseArea.city.id, name: profile.baseArea.city.name },
+      addressLine: profile.addressLine,
+      isAvailable: profile.isAvailable,
       radiusKm: profile.radiusKm,
       scheduledRadiusKm: profile.scheduledRadiusKm,
       visitingFee: profile.visitingFee,

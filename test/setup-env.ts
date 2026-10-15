@@ -20,6 +20,9 @@ process.env.JWT_ACCESS_SECRET =
 process.env.OTP_PEPPER = 'test-only-otp-pepper-0123456789abcdef0123456789';
 process.env.OTP_DEV_BYPASS = 'false';
 process.env.SMS_PROVIDER = 'console';
+// MSG91 widget sign-in is on so the route is reachable; the token check itself is replaced by FakeMsg91Verifier.
+process.env.MSG91_WIDGET_ENABLED = 'true';
+process.env.MSG91_AUTHKEY = 'test-only-msg91-authkey';
 // Lets each test present its own client IP (X-Forwarded-For) so per-IP rate limits stay isolated.
 process.env.TRUST_PROXY = '1';
 // The per-user limit is exercised by its own spec (which lowers it); the other suites make bursts of calls as one user.

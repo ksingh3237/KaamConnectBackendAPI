@@ -253,6 +253,18 @@ export class EnvVars {
   })
   SOS_WEBHOOK_URL?: string;
 
+  // --- MSG91 OTP widget sign-in (docs/msg91-otp-integration.md) ---
+  // Off by default: POST /auth/msg91/verify answers 404 until it is switched on.
+  @Transform(toBoolean)
+  @IsBoolean()
+  MSG91_WIDGET_ENABLED: boolean = false;
+
+  // Account-level Authkey. A real secret: server only, never in the mobile app.
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsString()
+  MSG91_AUTHKEY?: string;
+
   // --- Scheduling and availability (docs/01-requirements.md BR-13 to BR-22) ---
   // Length of a booking window when the customer does not say (A-13).
   @Transform(toNumber)
@@ -345,6 +357,10 @@ export function crossFieldProblems(env: EnvVars): string[] {
         'STORAGE_PROVIDER=local (files on the server disk) is not allowed in production; use s3',
       );
     }
+  }
+
+  if (env.MSG91_WIDGET_ENABLED && !env.MSG91_AUTHKEY) {
+    problems.push('MSG91_AUTHKEY is required when MSG91_WIDGET_ENABLED=true');
   }
 
   if (env.STORAGE_PROVIDER === StorageProvider.S3) {

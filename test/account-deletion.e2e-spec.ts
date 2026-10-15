@@ -290,6 +290,8 @@ describe('account deletion by anonymisation (e2e)', () => {
           upiId: 'raj@upi',
           vehicle: 'Splendor',
           badge: 'Pro',
+          addressLine: 'Shop 12, Sector 22 market',
+          localityName: 'Sector 82 JLPL',
         },
       });
       await t.prisma.workerDocument.create({
@@ -315,6 +317,9 @@ describe('account deletion by anonymisation (e2e)', () => {
         photoKey: null,
         upiId: null,
         vehicle: null,
+        addressLine: null,
+        localityName: null,
+        isAvailable: false,
         badge: null,
         rejectionReason: null,
         skills: [],

@@ -38,6 +38,7 @@ import {
   transition,
   type JobTab,
 } from './state/job-state-machine.js';
+import { placeName } from '../../common/utils/place.js';
 
 /** Abuse limits (docs/05-security-testing.md): a customer cannot flood the radar. */
 export const MAX_OPEN_JOBS = 10;
@@ -177,6 +178,7 @@ export class JobsService {
         durationMin,
         areaId: where.areaId,
         addressLine: where.addressLine,
+        localityName: where.localityName,
         lat: where.lat,
         lng: where.lng,
         targetWorkerId: directWorkerId ?? null,
@@ -271,7 +273,7 @@ export class JobsService {
         title: job.title,
         status: job.status,
         category: { id: job.category.id, title: job.category.titleEn },
-        area: job.area.name,
+        area: placeName(job.localityName, job.area.name),
         city: job.area.city.name,
         createdAt: job.createdAt.toISOString(),
         offersCount: offerCounts.get(job.id) ?? 0,
@@ -450,6 +452,7 @@ export class JobsService {
       return {
         areaId: saved.areaId,
         addressLine: saved.line,
+        localityName: saved.localityName,
         lat: saved.lat,
         lng: saved.lng,
       };
@@ -459,6 +462,7 @@ export class JobsService {
     return {
       areaId: a.areaId,
       addressLine: a.line,
+      localityName: a.localityName || null,
       lat: a.lat ?? null,
       lng: a.lng ?? null,
     };
@@ -507,12 +511,18 @@ export class JobsService {
         verificationStatus: VerificationStatus.VERIFIED,
         trades: { some: { categoryId } },
       },
-      select: { userId: true },
+      select: { userId: true, isAvailable: true },
     });
     if (!worker)
       throw invalid(
         'workerId',
         'this worker is not available for this service',
+      );
+    if (!worker.isAvailable)
+      throw new AppException(
+        'WORKER_OFFLINE',
+        409,
+        'This worker is not taking jobs right now. Post your job to reach other nearby workers.',
       );
 
     const area = await this.prisma.area.findUniqueOrThrow({

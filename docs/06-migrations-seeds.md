@@ -42,9 +42,9 @@ Implemented in `prisma/seed/reference-data.ts` (also used by the tests); run wit
 
 | Data | Source | Count |
 |---|---|---|
-| `service_categories` | `constants/mockData.ts` `SERVICE_CATEGORIES` (ids, EN/HI/PA titles, icon, colours, `baseFee`→int, examples), `sortOrder` in listed order | 8 |
+| `service_categories` | `constants/mockData.ts` `SERVICE_CATEGORIES` (ids, EN/HI/PA titles, icon, colours, `baseFee`→int, examples), `sortOrder` in listed order. 2026-10-15: "Deep Cleaning" renamed "Home & Deep Cleaning" (id `cleaner` kept) and 12 Tricity services added (vehicle repair, RO, TV, fridge, packers & movers, glass, generator, gardening, computer/IT, civil, catering, CCTV) | 20 |
 | `cities` | Chandigarh, Mohali (SAS Nagar), Panchkula | 3 |
-| `areas` | Union of the two app lists: Chandigarh – Sector 15, 17, 22, 35, 43 · Mohali – Phase 3B2, 5, 7, Sector 70 · Panchkula – Sector 5, 11, 20, MDC Sector 4. The 6 legacy-prototype extras (Chandigarh: Sector 8, Manimajra · Mohali: Sector 68, Kharar Road · Panchkula: Sector 12, 15) are seeded only with `SEED_LEGACY_AREAS=true` (Q-11) | 13 (+6) |
+| `areas` | `prisma/data/locations.ts`: the full Tricity list (2026-10-15). Chandigarh Sectors 1-56 (no 13), 61, 63 and localities; Mohali Phases 1-11, Sectors 66-127, Zirakpur, Kharar and nearby localities; Panchkula Sectors 1-28 (no 13 or 22) plus 12A and 31, MDC Sectors 1-6, Pinjore, Kalka. The original 13 app areas come first, and the 6 former legacy extras (Q-11) are now ordinary areas, so `SEED_LEGACY_AREAS` adds nothing. Centroids still unset | 195 |
 | Area centroids | `lat/lng` are **deliberately left empty** in `prisma/data/locations.ts`: they must come from a verified source, not from memory. The seed only *fills* a missing centroid and never overwrites one. Until they are filled, distance falls back to "same area" (Phase 4 needs them) | – |
 | Sequence | `jobs_job_number_seq` start (done in migration, not seed) | – |
 

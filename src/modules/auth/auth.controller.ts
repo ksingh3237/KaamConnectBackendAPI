@@ -9,6 +9,7 @@ import { Public } from '../../common/decorators/public.decorator.js';
 import { OtpChannel } from '../../generated/prisma/enums.js';
 import { AuthService, type VerifyResult } from './auth.service.js';
 import {
+  Msg91VerifyDto,
   RefreshTokenDto,
   RequestOtpDto,
   VerifyOtpDto,
@@ -38,6 +39,15 @@ export class AuthController {
   @HttpCode(200)
   verifyOtp(@Body() dto: VerifyOtpDto): Promise<VerifyResult> {
     return this.auth.verifyOtp(dto.phone, dto.code);
+  }
+
+  // Real-SMS sign-in: the app proves the number to the MSG91 widget, we verify the resulting token with MSG91.
+  @Public()
+  @Throttle({ default: { limit: 30, ttl: QUARTER_HOUR } })
+  @Post('msg91/verify')
+  @HttpCode(200)
+  msg91Verify(@Body() dto: Msg91VerifyDto): Promise<VerifyResult> {
+    return this.auth.msg91SignIn(dto.accessToken);
   }
 
   @Public()

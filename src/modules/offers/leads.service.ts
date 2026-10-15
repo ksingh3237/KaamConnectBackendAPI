@@ -26,6 +26,7 @@ import {
 import type { LeadsQueryDto } from './dto/offer.dto.js';
 import { toOfferSummary, type OfferSummary } from './offer-views.js';
 import { visibleOfferCounts } from './visible-offers.js';
+import { placeName } from '../../common/utils/place.js';
 
 const DEFAULT_LIMIT = 20;
 /** Newest open jobs of the worker's trades considered per request (launch scale: one metro). */
@@ -248,7 +249,7 @@ export class LeadsService {
         },
       },
       customerName: row.customer.fullName,
-      areaName: row.area.name,
+      areaName: placeName(row.localityName, row.area.name),
       cityName: row.area.city.name,
       distanceKm,
       urgency: row.timing,
