@@ -37,6 +37,7 @@ interface Ids {
   offerOnOpen: string; // Z's quote on `open`
   direct: string; // A's direct booking, waiting for Z
   address: string; // A's address
+  notification: string; // an unread inbox notification of A's
   worker: string; // a worker profile an admin could verify
   sos: string; // an SOS alert A raised on `assigned`
   requester: string; // a disabled user who asked for deletion (waits for an admin)
@@ -291,6 +292,15 @@ const CASES: Case[] = [
     path: (_ids, id) => `${V1}/customers/me/addresses/${id}`,
     ...CUSTOMER_ROUTE,
   },
+  // ── the inbox: any signed-in person may call it, but only the owner's notification exists for them ──
+  {
+    route: 'PATCH /notifications/:id/read',
+    resource: 'notification',
+    path: (_ids, id) => `${V1}/notifications/${id}/read`,
+    body: {},
+    strangers: ['B', 'W', 'X', 'Z', 'D'],
+    wrongRole: [],
+  },
   {
     route: 'POST /customers/me/addresses/:id/primary',
     resource: 'address',
@@ -402,6 +412,8 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       'job_security_events',
       'worker_documents',
       'service_categories',
+      // just the one notification: other inbox rows are written asynchronously by the setup's own bookings
+      `(SELECT * FROM in_app_notifications WHERE id = '${ids.notification}')`,
     ];
     const parts: string[] = [];
     for (const table of tables) {
@@ -486,7 +498,12 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       data: { isActive: false, deletionRequestedAt: new Date() },
     });
 
+    const notification = await t.prisma.inAppNotification.create({
+      data: { userId: A.userId, type: 'NEW_QUOTE', title: 'New quote', body: 'x' },
+    });
+
     ids = {
+      notification: notification.id,
       sos: alert.id,
       requester: requester.userId,
       assigned: made.job.id,
@@ -559,7 +576,7 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       unclassified: [...registered].filter((r) => !classified.has(r)).sort(),
       stale: [...classified].filter((r) => !registered.has(r)).sort(),
     }).toEqual({ unclassified: [], stale: [] });
-    expect(registered.size).toBe(39);
+    expect(registered.size).toBe(40);
   });
 
   describe.each(CASES)('$route', (c) => {

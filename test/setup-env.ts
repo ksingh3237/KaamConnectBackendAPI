@@ -32,4 +32,6 @@ process.env.USER_RATE_LIMIT_PER_MIN = '100000';
 process.env.STORAGE_PROVIDER = 'local';
 process.env.STORAGE_LOCAL_DIR = TEST_STORAGE_DIR;
 delete process.env.PUBLIC_BASE_URL;
+// A developer's real Firebase key must never be reachable from tests; createTestApp swaps in a recording fake anyway.
+delete process.env.FIREBASE_SERVICE_ACCOUNT;
 process.env.WORKER_VERIFICATION_MODE = 'manual';

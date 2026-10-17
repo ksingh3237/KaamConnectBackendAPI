@@ -25,6 +25,7 @@ import { EarningsModule } from './modules/earnings/earnings.module.js';
 import { ReviewsModule } from './modules/reviews/reviews.module.js';
 import { SafetyModule } from './modules/safety/safety.module.js';
 import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { OffersModule } from './modules/offers/offers.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { WorkersModule } from './modules/workers/workers.module.js';
@@ -54,6 +55,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     ReviewsModule,
     EarningsModule,
     SafetyModule,
+    NotificationsModule,
     RealtimeModule,
   ],
   // Order matters: rate-limit by address first (cheap, protects the login endpoints), authenticate, rate-limit by

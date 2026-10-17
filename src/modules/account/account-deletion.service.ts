@@ -299,6 +299,8 @@ export class AccountDeletionService {
     const tombstone = `del${userId.replace(/-/g, '').slice(-12)}`;
 
     await tx.refreshToken.deleteMany({ where: { userId } });
+    await tx.deviceToken.deleteMany({ where: { userId } });
+    await tx.inAppNotification.deleteMany({ where: { userId } });
     await tx.otpChallenge.deleteMany({ where: { phone: oldPhone } });
 
     // customer side: the home, the pictures of it and the name

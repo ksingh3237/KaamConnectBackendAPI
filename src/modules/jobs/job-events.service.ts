@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { JobStatus, LeadResponse } from '../../generated/prisma/enums.js';
+import {
+  JobStatus,
+  LeadResponse,
+  NotificationType,
+} from '../../generated/prisma/enums.js';
 import { MatchingService, spotOfJob } from '../matching/matching.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import {
   RealtimeEvent,
   type ArrivalCodeResetPayload,
@@ -34,6 +39,7 @@ export class JobEventsService {
     private readonly publisher: RealtimePublisher,
     private readonly matching: MatchingService,
     private readonly deliveries: LeadDeliveryService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /** `job.status` to the customer and whichever worker is involved (assigned, else the requested one). */
@@ -47,6 +53,40 @@ export class JobEventsService {
     const worker = job.workerId ?? job.targetWorkerId;
     if (worker)
       this.publisher.toUser(worker, RealtimeEvent.JOB_STATUS, payload);
+    this.pushStatus(job);
+  }
+
+  /** Phone push + inbox entry for the three moments the customer is waiting on. Fire and forget (never throws). */
+  private pushStatus(job: Participants): void {
+    const data = { jobId: job.id };
+    switch (job.status) {
+      case JobStatus.ASSIGNED:
+        void this.notifications.sendPush(job.customerId, {
+          type: NotificationType.WORKER_EN_ROUTE,
+          title: 'Your worker is on the way',
+          body: 'Track them live and keep your arrival code ready.',
+          data,
+        });
+        break;
+      case JobStatus.ARRIVED:
+        void this.notifications.sendPush(job.customerId, {
+          type: NotificationType.WORKER_ARRIVED,
+          title: 'Your worker has arrived',
+          body: 'They will share the bill for your approval before starting.',
+          data,
+        });
+        break;
+      case JobStatus.WORK_COMPLETED:
+        void this.notifications.sendPush(job.customerId, {
+          type: NotificationType.WORK_COMPLETED,
+          title: 'Work completed',
+          body: 'Please review the bill and pay your worker directly.',
+          data,
+        });
+        break;
+      default:
+        break;
+    }
   }
 
   /**
@@ -73,6 +113,12 @@ export class JobEventsService {
         leadPayloadOf(job, worker.distanceKm, false, job._count.offers),
       );
     }
+    void this.notifications.sendPushToMany([...fresh], {
+      type: NotificationType.NEW_LEAD,
+      title: 'New job near you',
+      body: job.title,
+      data: { jobId: job.id },
+    });
     return covering.length;
   }
 
@@ -89,6 +135,12 @@ export class JobEventsService {
       RealtimeEvent.DIRECT_REQUEST,
       leadPayloadOf(job, coverage?.distanceKm ?? null, true, job._count.offers),
     );
+    void this.notifications.sendPush(targetWorkerId, {
+      type: NotificationType.DIRECT_REQUEST,
+      title: 'A customer asked for you',
+      body: job.title,
+      data: { jobId: job.id },
+    });
   }
 
   /** The requested worker said no: the customer should pick someone else. */
@@ -167,6 +219,12 @@ export class JobEventsService {
       RealtimeEvent.BOOKING_CONFIRMED,
       payload,
     );
+    void this.notifications.sendPush(job.workerId, {
+      type: NotificationType.BOOKING_CONFIRMED,
+      title: 'Booking confirmed',
+      body: 'A customer chose you. Open the job to head over.',
+      data: { jobId: job.id },
+    });
   }
 
   /**
@@ -177,6 +235,12 @@ export class JobEventsService {
   billUpdated(customerId: string, jobId: string, total: number): void {
     const payload: BillUpdatedPayload = { jobId, total };
     this.publisher.toUser(customerId, RealtimeEvent.BILL_UPDATED, payload);
+    void this.notifications.sendPush(customerId, {
+      type: NotificationType.BILL_CREATED,
+      title: 'Your bill is ready',
+      body: `Total ₹${total}. Review it and approve to start the work.`,
+      data: { jobId },
+    });
   }
 
   /** The assigned worker backed out: the customer's request is open for quotes again. */

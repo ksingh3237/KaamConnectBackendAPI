@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { CatalogModule } from '../catalog/catalog.module.js';
 import { MatchingModule } from '../matching/matching.module.js';
 import { MediaModule } from '../media/media.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { ReviewsModule } from '../reviews/reviews.module.js';
 import { SchedulingModule } from '../scheduling/scheduling.module.js';
 import { WorkersModule } from '../workers/workers.module.js';
@@ -18,6 +19,7 @@ import { WorkerBackOutService } from './worker-backout.service.js';
     CatalogModule,
     MediaModule,
     MatchingModule,
+    NotificationsModule,
     WorkersModule,
     SchedulingModule,
     ReviewsModule,
