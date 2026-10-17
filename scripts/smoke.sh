@@ -62,7 +62,8 @@ C_TOKEN="$(login "$CUSTOMER_PHONE")"
 C_AUTH="Authorization: Bearer $C_TOKEN"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/v1/service-categories")" = "401" ] || fail "catalog is not protected"
 COUNT="$(curl -sf "$BASE/api/v1/service-categories" -H "$C_AUTH" | grep -o '"id"' | wc -l | tr -d ' ')"
-[ "$COUNT" = "8" ] || fail "expected 8 categories, got $COUNT"
+# Keep in step with SERVICE_CATEGORIES in prisma/data/service-categories.ts (20 since the catalog expansion).
+[ "$COUNT" = "20" ] || fail "expected 20 categories, got $COUNT"
 AREA_ID="$(curl -sf "$BASE/api/v1/locations" -H "$C_AUTH" | json 'v[0].areas[0].id')"
 
 PHOTO_KEY="$(upload "$C_TOKEN" PROFILE_PHOTO)"
