@@ -4,12 +4,14 @@ import {
   BillItemKind,
   JobStatus,
   LeadResponse,
+  NotificationType,
   OfferStatus,
   VerificationStatus,
 } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { generateArrivalCode } from '../jobs/arrival-code.js';
 import { JobEventsService } from '../jobs/job-events.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { jobInclude } from '../jobs/job-view.service.js';
 import { transition } from '../jobs/state/job-state-machine.js';
 import { VISIBLE_TO_CUSTOMER } from './visible-offers.js';
@@ -127,6 +129,7 @@ export class OffersService {
     private readonly cards: WorkerCardService,
     private readonly availability: AvailabilityService,
     private readonly deliveries: LeadDeliveryService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /** "Send Direct Quote to Customer": one quote per worker per job. */
@@ -606,5 +609,13 @@ export class OffersService {
       },
     };
     this.publisher.toUser(customerId, event, payload);
+    // A revised quote already updates the open screen; only a first quote is worth a phone alert.
+    if (event === RealtimeEvent.OFFER_NEW)
+      void this.notifications.sendPush(customerId, {
+        type: NotificationType.NEW_QUOTE,
+        title: 'New quote received',
+        body: `${worker.fullName} quoted ₹${offer.visitFee}, arriving in ${offer.etaMinutes} min.`,
+        data: { jobId: offer.jobId, offerId: offer.id },
+      });
   }
 }

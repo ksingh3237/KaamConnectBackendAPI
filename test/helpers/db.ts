@@ -28,7 +28,18 @@ export async function resetDatabase(prisma: PrismaClient): Promise<void> {
   if (tables.length === 0) return;
 
   const list = tables.map((t) => `"public"."${t.tablename}"`).join(', ');
-  await prisma.$executeRawUnsafe(
-    `TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`,
-  );
+  // Notifications are written after the request that caused them has answered (they never delay or fail a booking),
+  // so the previous test's last insert can still be running. If Postgres picks the TRUNCATE as the deadlock victim
+  // (40P01), the insert has finished by the time it is retried.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await prisma.$executeRawUnsafe(
+        `TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`,
+      );
+      return;
+    } catch (error) {
+      if (attempt >= 5 || !String(error).includes('40P01')) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
 }

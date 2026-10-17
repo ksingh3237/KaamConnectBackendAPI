@@ -265,6 +265,14 @@ export class EnvVars {
   @IsString()
   MSG91_AUTHKEY?: string;
 
+  // --- Push notifications (Firebase Cloud Messaging) ---
+  // Firebase service-account key: the JSON file's contents, or that JSON base64-encoded. A real secret: server only.
+  // Unset = push is skipped (the in-app notification inbox still works).
+  @Transform(emptyToUndefined)
+  @IsOptional()
+  @IsString()
+  FIREBASE_SERVICE_ACCOUNT?: string;
+
   // --- Scheduling and availability (docs/01-requirements.md BR-13 to BR-22) ---
   // Length of a booking window when the customer does not say (A-13).
   @Transform(toNumber)

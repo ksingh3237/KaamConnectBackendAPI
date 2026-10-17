@@ -119,6 +119,23 @@ enum SosStatus {
   RESOLVED
 }
 
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+}
+
+enum NotificationType {
+  NEW_LEAD // a job worth quoting on appeared near the worker
+  DIRECT_REQUEST // a customer asked this worker personally
+  NEW_QUOTE // a worker quoted the customer's request
+  BOOKING_CONFIRMED // the customer chose the worker; the window is reserved
+  WORKER_EN_ROUTE // the worker is on the way
+  WORKER_ARRIVED // the arrival code was verified
+  BILL_CREATED // the worker itemised the bill; waiting for approval
+  WORK_COMPLETED // work is done; ready for payment
+}
+
 // ───────────────────────── Identity & auth ─────────────────────────
 
 model User {
@@ -140,10 +157,47 @@ model User {
   acknowledgedSos SosAlert[]         @relation("SosAcknowledger")
   resolvedSos     SosAlert[]         @relation("SosResolver")
   securityEvents  JobSecurityEvent[]
+  deviceTokens    DeviceToken[]
+  notifications   InAppNotification[]
 
   // Hand-written in the account_deletion_and_sos_delivery migration (Prisma cannot express it), keep it there:
   //  - users_deletion_requested_idx: (deletion_requested_at) WHERE deletion_requested_at IS NOT NULL AND deleted_at IS NULL
   @@map("users")
+}
+
+// FCM registration token of one installed app. A token belongs to one user at a time: signing in on the same
+// device as someone else moves it. Rows are deleted when FCM reports the token dead.
+model DeviceToken {
+  id        String         @id @default(uuid(7)) @db.Uuid
+  userId    String         @map("user_id") @db.Uuid
+  token     String         @unique @db.VarChar(4096)
+  platform  DevicePlatform
+  isActive  Boolean        @default(true) @map("is_active")
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@map("device_tokens")
+}
+
+// The bell-icon inbox. Written for every push, whether or not any device could be reached.
+model InAppNotification {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(120)
+  body      String           @db.VarChar(300)
+  data      Json             @default("{}")
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, isRead])
+  @@map("in_app_notifications")
 }
 
 model OtpChallenge {

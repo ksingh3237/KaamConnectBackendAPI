@@ -6,6 +6,7 @@ import { configureApp } from '../../src/app.setup.js';
 import { USER_RATE_LIMIT } from '../../src/common/throttle/user-throttler.guard.js';
 import type { OtpChannel } from '../../src/generated/prisma/enums.js';
 import { AppException } from '../../src/common/exceptions/app.exception.js';
+import { FIREBASE_MESSAGING } from '../../src/modules/notifications/firebase.provider.js';
 import { Msg91TokenVerifier } from '../../src/modules/auth/msg91/msg91-token-verifier.js';
 import { OtpSender } from '../../src/modules/auth/sms/otp-sender.js';
 import {
@@ -82,6 +83,49 @@ export class RecordingSafetyNotifier extends SafetyNotifier {
   }
 }
 
+/** What the fake Firebase was asked to send, and how it should answer. */
+export interface SentMulticast {
+  tokens: string[];
+  notification: { title: string; body: string };
+  data: Record<string, string>;
+}
+
+/**
+ * Stands in for Firebase Cloud Messaging so no test can ever reach the real service. By default every token
+ * succeeds; `replies` maps a token to an FCM error code, and `throwNext` makes the whole call fail.
+ */
+export class RecordingMessaging {
+  sent: SentMulticast[] = [];
+  replies = new Map<string, string>();
+  throwNext: Error | null = null;
+
+  sendEachForMulticast(message: SentMulticast) {
+    if (this.throwNext) {
+      const error = this.throwNext;
+      this.throwNext = null;
+      return Promise.reject(error);
+    }
+    this.sent.push(message);
+    const responses = message.tokens.map((token) => {
+      const code = this.replies.get(token);
+      return code
+        ? { success: false, error: { code } }
+        : { success: true, messageId: 'm-' + token.slice(0, 6) };
+    });
+    return Promise.resolve({
+      responses,
+      successCount: responses.filter((r) => r.success).length,
+      failureCount: responses.filter((r) => !r.success).length,
+    });
+  }
+
+  reset(): void {
+    this.sent = [];
+    this.replies.clear();
+    this.throwNext = null;
+  }
+}
+
 let ipCounter = 0;
 /** A fresh client IP per test, so per-IP rate limits never leak between tests (TRUST_PROXY=1). */
 export function freshIp(): string {
@@ -95,6 +139,7 @@ export interface TestApp {
   sender: RecordingOtpSender;
   msg91: FakeMsg91Verifier;
   safety: RecordingSafetyNotifier;
+  messaging: RecordingMessaging;
   close: () => Promise<void>;
 }
 
@@ -117,6 +162,7 @@ export async function createTestApp(
   const sender = new RecordingOtpSender();
   const safety = new RecordingSafetyNotifier();
   const msg91 = new FakeMsg91Verifier();
+  const messaging = new RecordingMessaging();
   let builder = Test.createTestingModule({ imports: [AppModule] });
   if (options.userRateLimitPerMin !== undefined)
     builder = builder
@@ -129,6 +175,8 @@ export async function createTestApp(
     .useValue(msg91)
     .overrideProvider(SafetyNotifier)
     .useValue(safety)
+    .overrideProvider(FIREBASE_MESSAGING)
+    .useValue(messaging)
     .overrideProvider(WORKER_VERIFICATION_MODE)
     .useValue(options.verificationMode ?? 'manual')
     .compile();
@@ -146,6 +194,7 @@ export async function createTestApp(
     sender,
     msg91,
     safety,
+    messaging,
     close: () => app.close(),
   };
 }
