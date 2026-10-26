@@ -10,6 +10,8 @@ import {
 } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { LeadDeliveryService } from '../scheduling/lead-delivery.service.js';
+import { resolveReason } from './cancel-reasons.js';
+import { recordCancellation, visitFeeOwed } from './cancellation-record.js';
 import type { CancelJobDto } from './dto/job.dto.js';
 import { JobEventsService } from './job-events.service.js';
 import {
@@ -21,15 +23,21 @@ import { openUntil, readOpenTtl } from './open-until.js';
 import { transition } from './state/job-state-machine.js';
 
 /**
- * The assigned worker backs out before arriving (decision Q-5, docs/07-roadmap.md "Phase 5 must").
+ * The assigned worker cancels (decision Q-5; docs/13-cancellation.md). Two stages:
  *
- *  - A broadcast request goes back to OPEN with EVERYTHING the assignment set cleared, so the worker's
- *    calendar slot, the arrival code and the visit-fee bill line are gone.
- *  - A direct booking (D-3) is simply cancelled; its window stays for history but no longer blocks anyone
- *    because the database only counts ASSIGNED / ARRIVED / IN_PROGRESS jobs.
- *  - The once-only lead guard is reset for the re-open, otherwise the covering workers (who were told the
- *    lead closed when it was assigned) would never hear that it is open again. Workers who DECLINED the
- *    lead, and the worker who just backed out, stay out.
+ *  - ASSIGNED (on the way). A broadcast request goes back to OPEN with EVERYTHING the assignment set cleared, so
+ *    the worker's calendar slot, the arrival code and the visit-fee bill line are gone. That is unless the reason
+ *    says the customer or the address is the problem (not answering, wrong address...): re-broadcasting the same
+ *    request would not help, so it is closed. A direct booking (D-3) is always closed.
+ *  - ARRIVED (on site, cost not yet approved). Always closed: the customer has seen this worker, so quietly
+ *    re-opening would be a surprise. The bill lines stay, and when it is not the worker's doing the visit fee is
+ *    recorded as owed to them directly. The worker is released at once (one job on site at a time).
+ *
+ * Every cancellation is recorded in `job_cancellations`; the customer is told by push and inbox as well as the socket.
+ *
+ * The once-only lead guard is reset for a re-open, otherwise the covering workers (who were told the lead closed
+ * when it was assigned) would never hear that it is open again. Workers who DECLINED the lead, and the worker who
+ * just backed out, stay out.
  */
 @Injectable()
 export class WorkerBackOutService {
@@ -52,20 +60,31 @@ export class WorkerBackOutService {
     });
     if (!job) throw new AppException('NOT_FOUND', 404, 'Job not found');
 
+    const reason = resolveReason('WORKER', dto.reasonCode, dto.reason);
+    const stage = job.status;
     const direct = job.targetWorkerId !== null;
-    transition(direct ? 'WORKER_CANCEL_DIRECT' : 'WORKER_CANCEL', job.status);
+    // Closed (CANCELLED) or re-opened (OPEN)? On site and direct bookings are always closed.
+    const closes = stage === JobStatus.ARRIVED || direct || !reason.reopens;
+    transition(
+      stage === JobStatus.ARRIVED
+        ? 'WORKER_CANCEL_ARRIVED'
+        : closes
+          ? 'WORKER_CANCEL_DIRECT'
+          : 'WORKER_CANCEL',
+      stage,
+    );
 
     const now = new Date();
-    await this.prisma.$transaction(async (tx) => {
+    const visitFeeDue = await this.prisma.$transaction(async (tx) => {
       // Conditional update: if the worker has just arrived (or the customer cancelled), refuse.
       const claimed = await tx.job.updateMany({
-        where: { id: jobId, workerId, status: JobStatus.ASSIGNED },
-        data: direct
+        where: { id: jobId, workerId, status: stage },
+        data: closes
           ? {
               status: JobStatus.CANCELLED,
               cancelledAt: now,
               cancelledBy: CancelledBy.WORKER,
-              cancelReason: dto.reason || 'BACKED_OUT',
+              cancelReason: reason.text,
             }
           : {
               status: JobStatus.OPEN,
@@ -102,7 +121,9 @@ export class WorkerBackOutService {
         data: { status: OfferStatus.WITHDRAWN },
       });
 
-      if (!direct) {
+      const feeDue = await visitFeeOwed(tx, jobId, stage, 'WORKER', reason);
+
+      if (!closes) {
         await tx.billItem.deleteMany({ where: { jobId } });
         await tx.workerLead.deleteMany({
           where: {
@@ -117,6 +138,18 @@ export class WorkerBackOutService {
           tx,
         );
       }
+
+      await recordCancellation(tx, {
+        jobId,
+        actorId: workerId,
+        actor: 'WORKER',
+        workerId,
+        stage,
+        reason,
+        reopened: !closes,
+        visitFeeDue: feeDue,
+      });
+      return feeDue;
     });
 
     const fresh = await this.prisma.job.findUniqueOrThrow({
@@ -126,14 +159,13 @@ export class WorkerBackOutService {
 
     // The worker is free again: ask their app for a fresh location (docs BR-21).
     this.events.workerFreed(workerId, jobId);
-    if (direct) {
-      this.events.statusChanged(fresh);
-      this.events.directDeclined(fresh);
-    } else {
-      this.events.statusChanged(fresh);
+    this.events.statusChanged(fresh);
+    if (direct) this.events.directDeclined(fresh);
+    if (!closes) {
       this.events.jobReopened(fresh.customerId, jobId);
       await this.events.leadOpened(fresh);
     }
+    this.events.cancelledByWorker(fresh, reason.text, !closes, visitFeeDue);
     return this.views.forWorker(fresh, workerId);
   }
 }

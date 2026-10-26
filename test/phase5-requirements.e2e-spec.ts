@@ -1055,16 +1055,17 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       ).rejects.toThrow(/jobs_booking_window_valid/);
     });
 
-    it('cannot back out once on site, a stranger cannot back out for someone else, and a customer can still cancel', async () => {
+    it('cannot back out once the work has started, a stranger cannot back out for someone else, and the customer cannot cancel either', async () => {
+      // (Backing out while ON SITE became possible with docs/13-cancellation.md; once the cost is approved it is not.)
       const customer = await customerIn(t);
       const worker = await verifiedWorkerIn(t);
-      const { job } = await onSite(t, customer, worker);
+      const { job } = await underWay(t, customer, worker);
 
       const late = await http
         .post(`${V1}/jobs/${job.id}/cancel`, {}, { token: worker.accessToken })
         .expect(409);
       expect(late.body.code).toBe('INVALID_TRANSITION');
-      expect(await statusOf(t, job.id)).toBe('ARRIVED');
+      expect(await statusOf(t, job.id)).toBe('IN_PROGRESS');
 
       const pureWorker = await verifiedWorkerIn(t);
       await http

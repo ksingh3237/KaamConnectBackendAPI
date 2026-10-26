@@ -379,6 +379,11 @@ export class AccountDeletionService {
       where: { actorId: userId },
       data: { ip: null },
     });
+    // the reason code stays (it is how repeat back-outs are counted); the words they typed may name people or places
+    await tx.jobCancellation.updateMany({
+      where: { actorId: userId },
+      data: { note: null },
+    });
     await tx.$executeRaw`
       UPDATE sos_alerts SET payload = NULL
       WHERE delivered_at IS NOT NULL

@@ -18,6 +18,8 @@ import { visibleOfferCounts } from '../offers/visible-offers.js';
 import { MediaService } from '../media/media.service.js';
 import { AvailabilityService } from '../scheduling/availability.service.js';
 import { resolveScheduledFor } from '../scheduling/schedule-time.js';
+import { resolveReason } from './cancel-reasons.js';
+import { recordCancellation, visitFeeOwed } from './cancellation-record.js';
 import type {
   CancelJobDto,
   CreateJobDto,
@@ -33,7 +35,7 @@ import {
   type JobView,
 } from './job-view.service.js';
 import {
-  allowedFrom,
+  canTransition,
   statusesOfTab,
   transition,
   type JobTab,
@@ -315,8 +317,9 @@ export class JobsService {
   }
 
   /**
-   * One route, two people, decided by who owns the job: the customer cancels (OPEN or ASSIGNED); the
-   * assigned worker backs out (ASSIGNED only; decision Q-5). Anyone else gets what they got before:
+   * One route, two people, decided by who owns the job: the customer cancels (OPEN, ASSIGNED, or ARRIVED, where it
+   * means declining the cost); the assigned worker backs out (ASSIGNED, or ARRIVED; decision Q-5 and
+   * docs/13-cancellation.md). Anyone else gets what they got before:
    * a 403 if they have no customer profile at all, otherwise the same 404 as an unknown job.
    */
   async cancel(
@@ -356,21 +359,39 @@ export class JobsService {
       include: jobInclude,
     });
     if (!existing) throw new AppException('NOT_FOUND', 404, 'Job not found');
-    transition('CUSTOMER_CANCEL', existing.status); // 409 INVALID_TRANSITION if too late
+    const reason = resolveReason('CUSTOMER', dto.reasonCode, dto.reason);
+    const seen = existing.status;
+    transition('CUSTOMER_CANCEL', seen); // 409 INVALID_TRANSITION if too late
 
-    await this.prisma.$transaction(async (tx) => {
-      // Conditional update: if the job moved on in the meantime (e.g. the worker just arrived), refuse.
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      // Lock the row, so a racing accept or arrival waits for this decision, then read what the job really is NOW.
+      const [now] = await tx.$queryRaw<
+        { status: JobStatus; worker_id: string | null }[]
+      >`SELECT status, worker_id FROM jobs
+        WHERE id = ${jobId}::uuid AND customer_id = ${customerId}::uuid FOR UPDATE`;
+      // Refuse a job that moved past cancellable, and one where the worker ARRIVED while the customer was looking at
+      // an earlier screen: they must see the on-site wording and the visit fee before declining. (A request that was
+      // accepted in the meantime is still cancelled, as the customer asked: the stage recorded is the real one.)
+      if (
+        !now ||
+        !canTransition('CUSTOMER_CANCEL', now.status) ||
+        (now.status === JobStatus.ARRIVED && seen !== JobStatus.ARRIVED)
+      )
+        throw new AppException(
+          'INVALID_TRANSITION',
+          409,
+          'This job can no longer be cancelled',
+        );
+      const stage = now.status;
+      const workerId = now.worker_id;
+
       const claimed = await tx.job.updateMany({
-        where: {
-          id: jobId,
-          customerId,
-          status: { in: [...allowedFrom('CUSTOMER_CANCEL')] },
-        },
+        where: { id: jobId, customerId, status: stage },
         data: {
           status: JobStatus.CANCELLED,
           cancelledAt: new Date(),
           cancelledBy: CancelledBy.CUSTOMER,
-          cancelReason: dto.reason || null,
+          cancelReason: reason.text,
         },
       });
       if (claimed.count !== 1)
@@ -383,6 +404,19 @@ export class JobsService {
         where: { jobId, status: OfferStatus.PENDING },
         data: { status: OfferStatus.REJECTED },
       });
+      // Declining the cost after the worker came: they are owed the visit fee, directly (the app moves no money).
+      const feeDue = await visitFeeOwed(tx, jobId, stage, 'CUSTOMER', reason);
+      await recordCancellation(tx, {
+        jobId,
+        actorId: customerId,
+        actor: 'CUSTOMER',
+        workerId,
+        stage,
+        reason,
+        reopened: false,
+        visitFeeDue: feeDue,
+      });
+      return { stage, workerId, visitFeeDue: feeDue };
     });
 
     const cancelled = await this.prisma.job.findUniqueOrThrow({
@@ -390,11 +424,17 @@ export class JobsService {
       include: jobInclude,
     });
     this.events.statusChanged(cancelled);
-    if (existing.status === JobStatus.OPEN)
+    if (outcome.stage === JobStatus.OPEN)
       await this.events.leadClosed(cancelled, 'CANCELLED');
     // An assigned worker is free again: ask their app for a fresh location (BR-21).
-    if (existing.status !== JobStatus.OPEN && existing.workerId)
-      this.events.workerFreed(existing.workerId, jobId);
+    if (outcome.stage !== JobStatus.OPEN && outcome.workerId)
+      this.events.workerFreed(outcome.workerId, jobId);
+    // The worker who was given the job (or asked for it) hears it on their phone, not only if the app is open.
+    this.events.cancelledByCustomer(
+      cancelled,
+      reason.text,
+      outcome.visitFeeDue,
+    );
     return this.views.forCustomer(cancelled);
   }
 

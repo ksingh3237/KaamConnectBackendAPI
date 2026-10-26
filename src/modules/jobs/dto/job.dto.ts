@@ -20,6 +20,7 @@ import {
 import { Trim } from '../../../common/validators/trim.js';
 import { JobTiming } from '../../../generated/prisma/enums.js';
 import { AddressInputDto } from '../../customers/dto/customer.dto.js';
+import { ALL_REASON_CODES } from '../cancel-reasons.js';
 
 export const MAX_JOB_PHOTOS = 5;
 export const MAX_VOICE_SECONDS = 30;
@@ -105,6 +106,15 @@ export class DirectBookingDto extends CreateJobDto {
 }
 
 export class CancelJobDto {
+  /**
+   * Why (see jobs/cancel-reasons.ts for who may send which code). Optional so an app from before this field
+   * still works; the current app always sends one.
+   */
+  @IsOptional()
+  @IsIn(ALL_REASON_CODES)
+  reasonCode?: string;
+
+  /** The person's own words. Required with `OTHER`. */
   @IsOptional()
   @Trim()
   @IsString()

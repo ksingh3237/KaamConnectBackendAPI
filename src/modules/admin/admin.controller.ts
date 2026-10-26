@@ -19,8 +19,13 @@ import {
   WorkerVerificationService,
   type VerificationOutcome,
 } from '../workers/worker-verification.service.js';
-import { AdminService, type AdminWorkerItem } from './admin.service.js';
 import {
+  AdminService,
+  type AdminWorkerItem,
+  type CancellationFlag,
+} from './admin.service.js';
+import {
+  CancellationFlagsQueryDto,
   ListWorkersQueryDto,
   RejectWorkerDto,
   SetServiceDurationDto,
@@ -41,6 +46,14 @@ export class AdminController {
     @Query() query: ListWorkersQueryDto,
   ): Promise<Page<AdminWorkerItem>> {
     return this.admin.listWorkers(query);
+  }
+
+  /** Workers with repeated back-outs of their own making, most first. Read-only (docs/13-cancellation.md section 6). */
+  @Get('workers/cancellation-flags')
+  cancellationFlags(
+    @Query() query: CancellationFlagsQueryDto,
+  ): Promise<CancellationFlag[]> {
+    return this.admin.cancellationFlags(query);
   }
 
   /** Sets how long a visit for one service is assumed to take (decision D-14); `null` clears it. */

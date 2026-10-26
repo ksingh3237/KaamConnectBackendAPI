@@ -410,6 +410,7 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       'customer_profiles',
       'worker_leads',
       'job_security_events',
+      'job_cancellations',
       'worker_documents',
       'service_categories',
       // just the one notification: other inbox rows are written asynchronously by the setup's own bookings
@@ -499,7 +500,12 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
     });
 
     const notification = await t.prisma.inAppNotification.create({
-      data: { userId: A.userId, type: 'NEW_QUOTE', title: 'New quote', body: 'x' },
+      data: {
+        userId: A.userId,
+        type: 'NEW_QUOTE',
+        title: 'New quote',
+        body: 'x',
+      },
     });
 
     ids = {

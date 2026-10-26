@@ -32,6 +32,24 @@ export class ListWorkersQueryDto {
   cursor?: string;
 }
 
+export class CancellationFlagsQueryDto {
+  /** Look back this many days. Default: the same window the worker's own warning uses. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  days?: number;
+
+  /** Flag workers with at least this many back-outs of their own making. Default: the warning threshold. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  min?: number;
+}
+
 export class VerifyWorkerDto {
   /** Display label such as "Govt Certified Pro". Omit to leave the current badge unchanged. */
   @IsOptional()
