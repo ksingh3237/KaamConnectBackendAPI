@@ -2,9 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { referenceOf } from '../../common/utils/reference.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import {
+  CancelledBy,
   JobMediaKind,
   JobStatus,
-  type CancelledBy,
   type JobTiming,
 } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -14,6 +14,7 @@ import {
   MAX_ARRIVAL_CODE_RESETS,
 } from './arrival-code.js';
 import { MediaPurpose } from '../media/media-rules.js';
+import { labelOfReason } from './cancel-reasons.js';
 import { VISIBLE_TO_CUSTOMER } from '../offers/visible-offers.js';
 import { MediaService } from '../media/media.service.js';
 import { ReviewsService, type ReviewView } from '../reviews/reviews.service.js';
@@ -120,6 +121,19 @@ export interface JobView {
   review?: ReviewView | null;
   /** Customer only, COMPLETED: true while the job has not been rated, so the app offers the review screen. */
   canReview?: boolean;
+  /** CANCELLED by a customer or a worker, both parties: why, and what (if anything) is owed. Absent for expiry and older rows. */
+  cancellation?: CancellationView;
+}
+
+export interface CancellationView {
+  by: 'CUSTOMER' | 'WORKER';
+  /** Where the job was: OPEN, ASSIGNED (on the way) or ARRIVED (on site). */
+  stage: JobStatus;
+  reasonCode: string;
+  /** What the app shows: the person's own words if they gave any, else the label of the reason. */
+  reason: string;
+  /** Set when the worker had arrived and it is not their doing: this visit fee is payable to them directly. */
+  visitFeeDue: number | null;
 }
 
 /** Statuses from which the two parties may call each other. */
@@ -225,6 +239,14 @@ export class JobViewService {
       if (viewer === 'customer') view.canReview = view.review === null;
     }
     if (maySeeWork) view.workPhotos = await this.workPhotos(job);
+    // One extra read, only for a cancelled job opened by a person who was part of it.
+    if (
+      job.status === JobStatus.CANCELLED &&
+      (viewer === 'customer' ||
+        job.workerId === viewerId ||
+        job.targetWorkerId === viewerId)
+    )
+      view.cancellation = await this.cancellationOf(job.id);
 
     if (viewer === 'customer') {
       view.addressLine = job.addressLine;
@@ -263,6 +285,24 @@ export class JobViewService {
       }
     }
     return view;
+  }
+
+  private async cancellationOf(
+    jobId: string,
+  ): Promise<CancellationView | undefined> {
+    const row = await this.prisma.jobCancellation.findFirst({
+      where: { jobId },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!row) return undefined;
+    const by = row.actorRole === CancelledBy.WORKER ? 'WORKER' : 'CUSTOMER';
+    return {
+      by,
+      stage: row.stage,
+      reasonCode: row.reasonCode,
+      reason: row.note ?? labelOfReason(by, row.reasonCode),
+      visitFeeDue: row.visitFeeDue,
+    };
   }
 
   private async workPhotos(

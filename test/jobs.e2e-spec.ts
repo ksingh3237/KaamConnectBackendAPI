@@ -677,7 +677,7 @@ describe('jobs: posting, reading, listing, cancelling, expiry (e2e, real Postgre
       });
     });
 
-    it('refuses a second cancel, and cancelling once the worker has arrived', async () => {
+    it('refuses a second cancel, and cancelling once the cost is approved and the work has started', async () => {
       const customer = await customerIn(t);
       const job = await postJob(t, customer);
       await http
@@ -693,7 +693,8 @@ describe('jobs: posting, reading, listing, cancelling, expiry (e2e, real Postgre
       await t.prisma.job.update({
         where: { id: arrived.id },
         data: {
-          status: 'ARRIVED',
+          // Arrived is cancellable since docs/13-cancellation.md (declining the cost); in progress is not.
+          status: 'IN_PROGRESS',
           workerId: worker.userId,
           arrivedAt: new Date(),
           ...bookingWindow(),

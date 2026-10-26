@@ -164,7 +164,7 @@ Reads: responses embed short-lived signed GET URLs (`photoUrl`, `voiceNoteUrl`, 
 | `POST /jobs/:id/work-photos` | assigned worker | `{ kind: "BEFORE"\|"AFTER", key }` |
 | `POST /jobs/:id/complete-work` | assigned worker (IN_PROGRESS) | → WORK_COMPLETED |
 | `POST /jobs/:id/payment/confirm` | assigned worker | P3: worker confirms receipt (no UI yet) |
-| `POST /jobs/:id/cancel` | assigned worker (ASSIGNED) | Q-5: default re-opens the job and marks that worker's offer WITHDRAWN |
+| `POST /jobs/:id/cancel` | assigned worker (ASSIGNED or ARRIVED) | Q-5: from ASSIGNED a worker-side reason re-opens the job and marks that worker's offer WITHDRAWN; a customer-side reason, a direct booking, or any cancel from ARRIVED closes it. See `docs/13-cancellation.md` |
 
 ### 2.10 Admin (minimal, A-7) — P2
 
@@ -364,7 +364,7 @@ Everything is under `/api/v1` and needs a login. "Needs" is the profile the call
 | `POST /jobs/direct-booking` | customer | "Book Pro": same body plus `workerId` → `201 {…, awaitingWorker:true}` (no `notifiedWorkers`) |
 | `GET /customers/me/jobs?tab=&limit=&cursor=` | customer | Activity: `tab` = `ongoing` (default) / `completed` / `cancelled`; `{items, nextCursor, meta:{counts:{ongoing,completed,cancelled}}}` |
 | `GET /jobs/:id` | customer, assigned worker, or requested worker | Role-shaped job view (§9.3); anyone else `404` |
-| `POST /jobs/:id/cancel` `{reason?}` | customer (owner) | OPEN or ASSIGNED → CANCELLED; waiting quotes are rejected |
+| `POST /jobs/:id/cancel` `{reasonCode?, reason?}` | customer (owner) | OPEN, ASSIGNED or ARRIVED → CANCELLED; waiting quotes are rejected. The assigned worker is told by push and inbox (`docs/13-cancellation.md`) |
 | `GET /jobs/:id/offers?sort=fee\|eta` | customer (owner) | Compare Offers: live quotes (waiting or accepted) with a worker card each, `isFastest`, and (§10) `available`, `startsAt`, `nextFreeAt` |
 | `POST /jobs/:id/offers/:offerId/accept` | customer (owner) | → `{status:"ASSIGNED", arrivalCode, booking:{startAt,endAt,confirmedAt}, worker}`; `409 WORKER_UNAVAILABLE` if the worker has since taken a clashing booking (§10) |
 | `POST /jobs/:id/direct/accept` · `/direct/decline` | the requested worker | Answers a direct booking → job view |
@@ -404,7 +404,7 @@ Lead card fields: `id, reference, title, category{id,title{en,hi,pa}}, customerN
 
 ### 9.4 Job lifecycle (single source of truth: `jobs/state/job-state-machine.ts`)
 
-`OPEN → ASSIGNED → ARRIVED → IN_PROGRESS → WORK_COMPLETED → COMPLETED`, and `CANCELLED` from `OPEN` or `ASSIGNED` (customer), from `OPEN` by the requested worker (decline) or by the system (expiry). Phase 4 built the transitions out of `OPEN` and the customer cancel; **Phase 5 wired the rest** (arrival, bill approval, completion, payment, worker back-out: a broadcast job re-opens, a direct booking is cancelled; see §11).
+`OPEN → ASSIGNED → ARRIVED → IN_PROGRESS → WORK_COMPLETED → COMPLETED`, and `CANCELLED` from `OPEN`, `ASSIGNED` or `ARRIVED` (customer; from `ARRIVED` it is declining the cost), from `ASSIGNED` or `ARRIVED` by the assigned worker (`docs/13-cancellation.md`), from `OPEN` by the requested worker (decline) or by the system (expiry). Phase 4 built the transitions out of `OPEN` and the customer cancel; **Phase 5 wired the rest** (arrival, bill approval, completion, payment, worker back-out: a broadcast job re-opens, a direct booking is cancelled; see §11).
 
 | Timer | Value | Result |
 |---|---|---|
@@ -425,7 +425,7 @@ A sweeper runs every minute (safe on several instances). A request that has expi
 | 409 | `OFFER_EXISTS` | You already quoted on this job |
 | 409 | `OFFER_NOT_PENDING` | Quote was withdrawn, rejected or accepted |
 | 409 | `DIRECT_JOB` | A direct request cannot be quoted on or accepted through quotes |
-| 409 | `INVALID_TRANSITION` | The job's status does not allow that action (e.g. cancelling after the worker arrived) |
+| 409 | `INVALID_TRANSITION` | The job's status does not allow that action (e.g. cancelling once the customer has approved the cost, or after the other side already cancelled) |
 | 422 | `VALIDATION_FAILED` | Includes: `workerId` not available / not serving you / yourself; bad media keys (`photoKeys.0`, `voiceNote.key`); unknown address |
 
 ### 9.6 Real-time (Socket.IO) as built
@@ -553,7 +553,9 @@ Everything is under `/api/v1`. **Who may call what is decided by owning the job*
 | `GET /jobs/:id/tracking` | the customer or the assigned worker, job ASSIGNED to WORK_COMPLETED | See §11.3 |
 | `POST /jobs/:id/sos` `{lat?, lng?}` | the customer or the assigned worker, job ASSIGNED to WORK_COMPLETED | `201 {alertId, repeated}`. Both coordinates or neither (`422`). A second tap by the same person within a minute returns the first `alertId` with `repeated:true` and does not page the desk again. `409 SOS_NOT_AVAILABLE` otherwise |
 | `GET /workers/me/jobs?tab=ongoing\|completed\|cancelled&limit=&cursor=` | any worker profile (own history; works while under review) | `{items, nextCursor, meta:{counts}, pendingQuotes?}`. Jobs the worker was given only (ASSIGNED…WORK_COMPLETED / COMPLETED / CANCELLED), newest first. `pendingQuotes` (ongoing tab, first page): quotes the customer has not answered, capped at 50. Items carry `customerName`, area and city, `scheduledFor`, the booked window and the bill `total`; **no address or phone** |
-| `POST /jobs/:id/cancel` `{reason?}` | the customer **or** the assigned worker | Decided by who owns the job. Customer: OPEN/ASSIGNED → CANCELLED (unchanged). Worker: ASSIGNED only → see §11.2. A stranger: `403` if they have no customer profile (as before), otherwise `404` |
+| `POST /jobs/:id/cancel` `{reasonCode?, reason?}` | the customer **or** the assigned worker | Decided by who owns the job. Customer: OPEN/ASSIGNED/**ARRIVED** → CANCELLED (from ARRIVED it means declining the cost). Worker: ASSIGNED or **ARRIVED** → see §11.2 and `docs/13-cancellation.md` (reason codes, what re-opens, visit fee owed, notifications). `reasonCode` is optional for older apps; `OTHER` needs `reason`. `409 INVALID_TRANSITION` from IN_PROGRESS onward. A stranger: `403` if they have no customer profile (as before), otherwise `404` |
+| `GET /workers/me/cancellations` | any worker profile | The worker's own cancellations (a re-opened job leaves their job list) and the repeat back-out warning `{summary:{windowDays,warnAt,recent,warn}, items}`; see `docs/13-cancellation.md` §6 |
+| `GET /admin/workers/cancellation-flags?days=&min=` | admin | Workers with repeated own-fault back-outs, most first. Read-only |
 | `PATCH /admin/service-categories/:id/duration` `{defaultDurationMin: 15–480 \| null}` | admin | Sets how long a visit for that service is assumed to take (decision D-14); `null` clears it. Affects only jobs posted afterwards |
 
 ### 11.2 A worker backing out

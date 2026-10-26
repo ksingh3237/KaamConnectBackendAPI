@@ -10,7 +10,8 @@ export type JobAction =
   | 'EXPIRE' // nobody responded in time
   | 'CUSTOMER_CANCEL'
   | 'WORKER_CANCEL' // assigned worker backs out: broadcast jobs re-open (Q-5)
-  | 'WORKER_CANCEL_DIRECT' // ...but a direct booking (D-3) is simply cancelled
+  | 'WORKER_CANCEL_DIRECT' // ...but a direct booking (D-3), or a back-out whose reason makes a re-broadcast pointless, is simply cancelled
+  | 'WORKER_CANCEL_ARRIVED' // the worker is on site and cannot (or will not) do the work: always closed, never re-opened
   | 'VERIFY_ARRIVAL' // worker enters the customer's 4-digit code
   | 'APPROVE_BILL' // customer approves the inspected cost
   | 'COMPLETE_WORK' // worker finishes
@@ -44,9 +45,11 @@ export const TRANSITIONS: readonly Transition[] = [
   { action: 'DECLINE_DIRECT', actor: 'worker', from: [OPEN], to: CANCELLED },
   { action: 'EXPIRE', actor: 'system', from: [OPEN], to: CANCELLED },
   {
+    // From ARRIVED this is "decline the cost": once the customer has approved the bill the job is IN_PROGRESS and
+    // can no longer be cancelled by either side (docs/13-cancellation.md section 2).
     action: 'CUSTOMER_CANCEL',
     actor: 'customer',
-    from: [OPEN, ASSIGNED],
+    from: [OPEN, ASSIGNED, ARRIVED],
     to: CANCELLED,
   },
   { action: 'WORKER_CANCEL', actor: 'worker', from: [ASSIGNED], to: OPEN },
@@ -54,6 +57,12 @@ export const TRANSITIONS: readonly Transition[] = [
     action: 'WORKER_CANCEL_DIRECT',
     actor: 'worker',
     from: [ASSIGNED],
+    to: CANCELLED,
+  },
+  {
+    action: 'WORKER_CANCEL_ARRIVED',
+    actor: 'worker',
+    from: [ARRIVED],
     to: CANCELLED,
   },
   { action: 'VERIFY_ARRIVAL', actor: 'worker', from: [ASSIGNED], to: ARRIVED },

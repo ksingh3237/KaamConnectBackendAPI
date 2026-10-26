@@ -66,6 +66,7 @@ describe('job state machine', () => {
       CUSTOMER_CANCEL: 'customer',
       WORKER_CANCEL: 'worker',
       WORKER_CANCEL_DIRECT: 'worker',
+      WORKER_CANCEL_ARRIVED: 'worker',
       VERIFY_ARRIVAL: 'worker',
       APPROVE_BILL: 'customer',
       COMPLETE_WORK: 'worker',
@@ -95,10 +96,16 @@ describe('job state machine', () => {
     expect(canTransition('COMPLETE_WORK', JobStatus.ARRIVED)).toBe(false);
   });
 
-  it('a customer can cancel before work starts but not after the worker has arrived', () => {
+  it('a customer can cancel until the cost is approved, and never once the work has started', () => {
     expect(canTransition('CUSTOMER_CANCEL', JobStatus.OPEN)).toBe(true);
     expect(canTransition('CUSTOMER_CANCEL', JobStatus.ASSIGNED)).toBe(true);
-    expect(canTransition('CUSTOMER_CANCEL', JobStatus.ARRIVED)).toBe(false);
+    expect(canTransition('CUSTOMER_CANCEL', JobStatus.ARRIVED)).toBe(true);
+    for (const status of [
+      JobStatus.IN_PROGRESS,
+      JobStatus.WORK_COMPLETED,
+      JobStatus.COMPLETED,
+    ])
+      expect(canTransition('CUSTOMER_CANCEL', status)).toBe(false);
   });
 
   it('a worker backing out re-opens a broadcast job (Q-5) but cancels a direct booking', () => {
@@ -110,7 +117,7 @@ describe('job state machine', () => {
     );
   });
 
-  it('a worker can only back out before arriving', () => {
+  it('a worker can only back out (and re-open the request) before arriving', () => {
     for (const status of [
       JobStatus.ARRIVED,
       JobStatus.IN_PROGRESS,
@@ -119,6 +126,21 @@ describe('job state machine', () => {
       expect(canTransition('WORKER_CANCEL', status)).toBe(false);
       expect(canTransition('WORKER_CANCEL_DIRECT', status)).toBe(false);
     }
+  });
+
+  it('a worker who is on site can cancel, and that always closes the job instead of re-opening it', () => {
+    expect(transition('WORKER_CANCEL_ARRIVED', JobStatus.ARRIVED)).toBe(
+      JobStatus.CANCELLED,
+    );
+    for (const status of [
+      JobStatus.OPEN,
+      JobStatus.ASSIGNED,
+      JobStatus.IN_PROGRESS,
+      JobStatus.WORK_COMPLETED,
+      JobStatus.COMPLETED,
+      JobStatus.CANCELLED,
+    ])
+      expect(canTransition('WORKER_CANCEL_ARRIVED', status)).toBe(false);
   });
 
   it('every status is either active or terminal, and maps to exactly one Activity tab', () => {

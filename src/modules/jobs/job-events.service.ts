@@ -249,6 +249,56 @@ export class JobEventsService {
     this.publisher.toUser(customerId, RealtimeEvent.JOB_REOPENED, payload);
   }
 
+  /**
+   * The customer cancelled a job that had a worker (or a direct request addressed to one): push + inbox for that worker.
+   * `visitFeeDue` is set when the worker had already arrived; the app never moves money, it only says what is owed.
+   */
+  cancelledByCustomer(
+    job: Participants & { title: string },
+    text: string | null,
+    visitFeeDue: number | null,
+  ): void {
+    const worker = job.workerId ?? job.targetWorkerId;
+    if (!worker) return;
+    const fee =
+      visitFeeDue !== null && visitFeeDue > 0
+        ? ` The visit fee of ₹${visitFeeDue} is payable to you directly.`
+        : '';
+    void this.notifications.sendPush(worker, {
+      type: NotificationType.JOB_CANCELLED_BY_CUSTOMER,
+      title: 'The customer cancelled the job',
+      body: `${job.title}${text ? `: ${text}` : ''}.${fee}`,
+      data: { jobId: job.id },
+    });
+  }
+
+  /**
+   * The assigned worker cancelled: push + inbox for the customer. `reopened` says the request is open for new
+   * quotes again (the app then opens the quotes); otherwise it is closed and they can post it again.
+   */
+  cancelledByWorker(
+    job: Participants & { title: string },
+    text: string | null,
+    reopened: boolean,
+    visitFeeDue: number | null,
+  ): void {
+    const reason = text ? ` Reason: ${text}.` : '';
+    const fee =
+      visitFeeDue !== null && visitFeeDue > 0
+        ? ` The visit fee of ₹${visitFeeDue} is payable to the worker directly.`
+        : '';
+    void this.notifications.sendPush(job.customerId, {
+      type: NotificationType.JOB_CANCELLED_BY_WORKER,
+      title: reopened
+        ? 'Your worker cannot make it'
+        : 'Your worker cancelled the job',
+      body: reopened
+        ? `${job.title}: your request is open again, so you can choose another quote.${reason}`
+        : `${job.title}.${reason}${fee}`,
+      data: { jobId: job.id, reopened },
+    });
+  }
+
   /** The customer issued a new arrival code: tells the worker to ask for it (the code itself is never pushed). */
   arrivalCodeReset(workerId: string, jobId: string): void {
     const payload: ArrivalCodeResetPayload = { jobId };

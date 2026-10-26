@@ -13,6 +13,8 @@ import { JobViewService } from './job-view.service.js';
 import { CustomerJobsController, JobsController } from './jobs.controller.js';
 import { JobsService } from './jobs.service.js';
 import { WorkerBackOutService } from './worker-backout.service.js';
+import { WorkerCancellationsController } from './worker-cancellations.controller.js';
+import { WorkerCancellationsService } from './worker-cancellations.service.js';
 
 @Module({
   imports: [
@@ -24,7 +26,11 @@ import { WorkerBackOutService } from './worker-backout.service.js';
     SchedulingModule,
     ReviewsModule,
   ],
-  controllers: [JobsController, CustomerJobsController],
+  controllers: [
+    JobsController,
+    CustomerJobsController,
+    WorkerCancellationsController,
+  ],
   providers: [
     JobsService,
     DirectBookingService,
@@ -32,6 +38,7 @@ import { WorkerBackOutService } from './worker-backout.service.js';
     JobEventsService,
     JobViewService,
     WorkerBackOutService,
+    WorkerCancellationsService,
   ],
   exports: [JobEventsService, JobViewService, JobsService],
 })
