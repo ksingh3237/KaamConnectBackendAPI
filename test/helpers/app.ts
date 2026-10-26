@@ -88,6 +88,11 @@ export interface SentMulticast {
   tokens: string[];
   notification: { title: string; body: string };
   data: Record<string, string>;
+  android?: unknown;
+  apns?: {
+    headers: Record<string, string>;
+    payload: { aps: Record<string, unknown> };
+  };
 }
 
 /**

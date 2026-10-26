@@ -124,7 +124,12 @@ export class NotificationsService {
           tokens: batch,
           notification: { title: input.title, body: input.body },
           data: stringData,
+          // One message serves every phone: each platform reads only its own block. `apns-priority 10` = deliver now.
           android: { priority: 'high', notification: { channelId: 'default' } },
+          apns: {
+            headers: { 'apns-priority': '10' },
+            payload: { aps: { sound: 'default' } },
+          },
         });
         // Only tokens FCM says will never work again are removed. Temporary errors (unavailable, internal-error,
         // quota) keep the token, and so does `invalid-argument`, which can equally mean a bad payload.

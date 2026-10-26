@@ -303,6 +303,26 @@ describe('notifications (e2e)', () => {
       expect((await inbox(withNone))[0]!.data.jobId).toBe(job.id);
     });
 
+    it('reaches an Android phone and an iPhone of the same person in one message, with the Apple settings', async () => {
+      const customer = await customerIn(t);
+      const worker = await verifiedWorkerIn(t);
+      await registerToken(worker, token('w-android'), 'ANDROID').expect(204);
+      await registerToken(worker, token('w-iphone'), 'IOS').expect(204);
+
+      await postJob(t, customer);
+
+      await eventually(async () => t.messaging.sent.length > 0);
+      const sent = t.messaging.sent[0]!;
+      expect([...sent.tokens].sort()).toEqual(
+        [token('w-android'), token('w-iphone')].sort(),
+      );
+      expect(sent.apns).toEqual({
+        headers: { 'apns-priority': '10' },
+        payload: { aps: { sound: 'default' } },
+      });
+      expect(sent.android).toBeDefined();
+    });
+
     it('does not fail the booking when Firebase is down, and still fills the inbox', async () => {
       const customer = await customerIn(t);
       const worker = await verifiedWorkerIn(t);

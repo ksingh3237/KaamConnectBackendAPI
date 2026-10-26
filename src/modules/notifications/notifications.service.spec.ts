@@ -49,6 +49,12 @@ describe('NotificationsService.sendPush', () => {
       expect.objectContaining({
         tokens: ['tok-0'],
         data: { type: 'NEW_QUOTE', jobId: 'job-1' },
+        // both platforms are served by the one message
+        android: expect.objectContaining({ priority: 'high' }),
+        apns: {
+          headers: { 'apns-priority': '10' },
+          payload: { aps: { sound: 'default' } },
+        },
       }),
     );
   });
