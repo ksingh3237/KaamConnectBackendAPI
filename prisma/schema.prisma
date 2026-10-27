@@ -136,6 +136,8 @@ enum NotificationType {
   WORK_COMPLETED // work is done; ready for payment
   JOB_CANCELLED_BY_CUSTOMER // the customer cancelled a job the worker was given
   JOB_CANCELLED_BY_WORKER // the assigned worker cancelled: the request is open again, or (data.reopened false) closed
+  DIRECT_DECLINED // the worker a customer asked for personally said no
+  DIRECT_EXPIRED // the worker a customer asked for personally never answered in time
 }
 
 // ───────────────────────── Identity & auth ─────────────────────────

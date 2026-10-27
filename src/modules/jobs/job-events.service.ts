@@ -143,17 +143,29 @@ export class JobEventsService {
     });
   }
 
-  /** The requested worker said no: the customer should pick someone else. */
-  directDeclined(job: Participants): void {
+  /** The requested worker said no: the customer should pick someone else. Push + inbox, because the app may be closed. */
+  directDeclined(job: Participants & { title: string }): void {
     this.publisher.toUser(job.customerId, RealtimeEvent.DIRECT_DECLINED, {
       jobId: job.id,
+    });
+    void this.notifications.sendPush(job.customerId, {
+      type: NotificationType.DIRECT_DECLINED,
+      title: 'The worker cannot take your request',
+      body: `${job.title}: please choose another worker.`,
+      data: { jobId: job.id },
     });
   }
 
   /** Nobody answered the direct request in time. */
-  directExpired(job: Participants): void {
+  directExpired(job: Participants & { title: string }): void {
     this.publisher.toUser(job.customerId, RealtimeEvent.DIRECT_EXPIRED, {
       jobId: job.id,
+    });
+    void this.notifications.sendPush(job.customerId, {
+      type: NotificationType.DIRECT_EXPIRED,
+      title: 'The worker did not answer',
+      body: `${job.title}: please choose another worker.`,
+      data: { jobId: job.id },
     });
   }
 

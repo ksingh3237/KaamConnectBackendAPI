@@ -1,6 +1,7 @@
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { CITIES } from '../prisma/data/locations.js';
 import { SERVICE_CATEGORIES } from '../prisma/data/service-categories.js';
+import { applyCentroids } from '../prisma/seed/centroids.js';
 import { seedReferenceData } from '../prisma/seed/reference-data.js';
 import { createTestPrisma, resetDatabase } from './helpers/db.js';
 
@@ -178,5 +179,84 @@ describe('reference data seed', () => {
       'प्लंबर / नलसाज',
       'ਪਲੰਬਰ',
     ]);
+  });
+});
+
+describe('area centroid import', () => {
+  let prisma: PrismaClient;
+
+  beforeAll(() => {
+    prisma = createTestPrisma();
+  });
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+  beforeEach(async () => {
+    await resetDatabase(prisma);
+    await seedReferenceData(prisma);
+  });
+
+  // Test-only numbers inside the plausibility box; they say nothing about where these places really are.
+  const row = (area: string, lat: number, lng: number) => ({
+    city: 'Chandigarh',
+    area,
+    lat,
+    lng,
+  });
+  const centroidOf = async (name: string) => {
+    const a = await prisma.area.findFirstOrThrow({
+      where: { name, city: { name: 'Chandigarh' } },
+    });
+    return [a.lat, a.lng];
+  };
+
+  it('a dry run reports what it would fill and writes nothing', async () => {
+    const report = await applyCentroids(prisma, [row('Sector 17', 30.7, 76.8)]);
+    expect(report.filled).toEqual(['Chandigarh / Sector 17']);
+    expect(await centroidOf('Sector 17')).toEqual([null, null]);
+  });
+
+  it('fills a missing centroid, and never overwrites one that is already set', async () => {
+    await applyCentroids(prisma, [row('Sector 17', 30.7, 76.8)], {
+      apply: true,
+    });
+    expect(await centroidOf('Sector 17')).toEqual([30.7, 76.8]);
+
+    const again = await applyCentroids(
+      prisma,
+      [row('Sector 17', 30.7, 76.8), row('Sector 22', 30.71, 76.81)],
+      { apply: true },
+    );
+    expect(again).toMatchObject({
+      unchanged: 1,
+      filled: ['Chandigarh / Sector 22'],
+    });
+
+    const changed = await applyCentroids(
+      prisma,
+      [row('Sector 17', 30.9, 76.9)],
+      {
+        apply: true,
+      },
+    );
+    expect(changed.kept).toEqual(['Chandigarh / Sector 17']);
+    expect(await centroidOf('Sector 17')).toEqual([30.7, 76.8]);
+  });
+
+  it('reports a city or area the database does not have, and still fills the rest', async () => {
+    const report = await applyCentroids(
+      prisma,
+      [
+        row('Sector 99', 30.7, 76.8),
+        { city: 'Nowhere', area: 'Sector 17', lat: 30.7, lng: 76.8 },
+        row('Sector 8', 30.75, 76.79),
+      ],
+      { apply: true },
+    );
+    expect(report.unknown).toEqual([
+      'Chandigarh / Sector 99',
+      'Nowhere / Sector 17',
+    ]);
+    expect(report.filled).toEqual(['Chandigarh / Sector 8']);
   });
 });

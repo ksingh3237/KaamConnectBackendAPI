@@ -30,6 +30,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
+    "db:centroids": "tsx prisma/seed/import-centroids.ts",
     "db:studio": "prisma studio",
     "test:perf": "vitest run --config ./vitest.config.perf.ts",
     "dev:local": "node scripts/start-local.mjs",
