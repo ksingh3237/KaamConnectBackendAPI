@@ -319,6 +319,14 @@ const CASES: Case[] = [
     wrongRole: [],
   },
   {
+    route: 'POST /admin/cancellations/:id/excuse',
+    resource: 'worker', // any id: a non-admin is turned away before the id is looked at
+    path: (_ids, id) => `${V1}/admin/cancellations/${id}/excuse`,
+    body: {},
+    strangers: ['A', 'B', 'W', 'X', 'Z'],
+    wrongRole: [],
+  },
+  {
     route: 'POST /admin/workers/:id/reject',
     resource: 'worker',
     path: (_ids, id) => `${V1}/admin/workers/${id}/reject`,
@@ -582,7 +590,7 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       unclassified: [...registered].filter((r) => !classified.has(r)).sort(),
       stale: [...classified].filter((r) => !registered.has(r)).sort(),
     }).toEqual({ unclassified: [], stale: [] });
-    expect(registered.size).toBe(40);
+    expect(registered.size).toBe(41);
   });
 
   describe.each(CASES)('$route', (c) => {

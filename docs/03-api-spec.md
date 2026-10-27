@@ -410,6 +410,7 @@ Lead card fields: `id, reference, title, category{id,title{en,hi,pa}}, customerN
 |---|---|---|
 | Broadcast request unanswered | `JOB_OPEN_TTL_HOURS` (24 h) | `CANCELLED`, `cancelledBy=SYSTEM`, `cancelReason=EXPIRED`, waiting quotes rejected |
 | Direct request unanswered | `DIRECT_ACCEPT_TTL_MIN` (10 min) | same |
+| Assigned worker has not arrived | promised arrival (`booked_start_at`) + `NO_SHOW_GRACE_MIN` (30 min) | released: a broadcast job goes back to `OPEN`, a direct booking is `CANCELLED` with `cancelledBy=SYSTEM`; recorded as a no-show that counts against the worker (docs/15-no-show.md) |
 
 A sweeper runs every minute (safe on several instances). A request that has expired but not yet been swept can no longer be quoted on or accepted (`409 JOB_NOT_OPEN`).
 
@@ -555,7 +556,8 @@ Everything is under `/api/v1`. **Who may call what is decided by owning the job*
 | `GET /workers/me/jobs?tab=ongoing\|completed\|cancelled&limit=&cursor=` | any worker profile (own history; works while under review) | `{items, nextCursor, meta:{counts}, pendingQuotes?}`. Jobs the worker was given only (ASSIGNED…WORK_COMPLETED / COMPLETED / CANCELLED), newest first. `pendingQuotes` (ongoing tab, first page): quotes the customer has not answered, capped at 50. Items carry `customerName`, area and city, `scheduledFor`, the booked window and the bill `total`; **no address or phone** |
 | `POST /jobs/:id/cancel` `{reasonCode?, reason?}` | the customer **or** the assigned worker | Decided by who owns the job. Customer: OPEN/ASSIGNED/**ARRIVED** → CANCELLED (from ARRIVED it means declining the cost). Worker: ASSIGNED or **ARRIVED** → see §11.2 and `docs/13-cancellation.md` (reason codes, what re-opens, visit fee owed, notifications). `reasonCode` is optional for older apps; `OTHER` needs `reason`. `409 INVALID_TRANSITION` from IN_PROGRESS onward. A stranger: `403` if they have no customer profile (as before), otherwise `404` |
 | `GET /workers/me/cancellations` | any worker profile | The worker's own cancellations (a re-opened job leaves their job list) and the repeat back-out warning `{summary:{windowDays,warnAt,recent,warn}, items}`; see `docs/13-cancellation.md` §6 |
-| `GET /admin/workers/cancellation-flags?days=&min=` | admin | Workers with repeated own-fault back-outs, most first. Read-only |
+| `GET /admin/workers/cancellation-flags?days=&min=` | admin | Workers with repeated own-fault back-outs (their own cancels and no-shows), most first. Read-only |
+| `POST /admin/cancellations/:id/excuse` | admin | Stops one cancellation (typically a no-show) from counting against the worker; the record stays. `200 { id, excused, excusedAt }`, idempotent. `409 NOT_COUNTED` if it never counted, `404` unknown id |
 | `PATCH /admin/service-categories/:id/duration` `{defaultDurationMin: 15–480 \| null}` | admin | Sets how long a visit for that service is assumed to take (decision D-14); `null` clears it. Affects only jobs posted afterwards |
 
 ### 11.2 A worker backing out

@@ -80,20 +80,20 @@ export class AdminService {
     const min = input.min ?? BACK_OUT_WARN_AT;
     const since = new Date(Date.now() - days * 86_400_000);
     const grouped = await this.prisma.jobCancellation.groupBy({
-      by: ['actorId'],
+      by: ['workerId'],
       where: {
-        actorId: { not: null },
-        actorRole: CancelledBy.WORKER,
+        workerId: { not: null },
+        actorRole: { in: [CancelledBy.WORKER, CancelledBy.SYSTEM] },
         countsAgainstWorker: true,
         createdAt: { gte: since },
       },
       _count: { _all: true },
       _max: { createdAt: true },
-      having: { actorId: { _count: { gte: min } } },
-      orderBy: { _count: { actorId: 'desc' } },
+      having: { workerId: { _count: { gte: min } } },
+      orderBy: { _count: { workerId: 'desc' } },
       take: FLAG_LIMIT,
     });
-    const ids = grouped.map((g) => g.actorId!);
+    const ids = grouped.map((g) => g.workerId!);
     const workers = await this.prisma.workerProfile.findMany({
       where: { userId: { in: ids } },
       select: {
@@ -104,7 +104,7 @@ export class AdminService {
     });
     const byId = new Map(workers.map((w) => [w.userId, w]));
     return grouped.flatMap((g) => {
-      const worker = byId.get(g.actorId!);
+      const worker = byId.get(g.workerId!);
       return worker
         ? [
             {
@@ -117,6 +117,32 @@ export class AdminService {
           ]
         : [];
     });
+  }
+
+  /**
+   * An admin decides a cancellation should not count against the worker (a no-show in a real emergency, a wrong
+   * assignment...). The record stays, it just stops feeding the warning and the flag list. Saying it twice is harmless.
+   */
+  async excuseCancellation(
+    id: string,
+  ): Promise<{ id: string; excused: true; excusedAt: string }> {
+    const row = await this.prisma.jobCancellation.findUnique({ where: { id } });
+    if (!row)
+      throw new AppException('NOT_FOUND', 404, 'Cancellation not found');
+    if (row.excusedAt)
+      return { id, excused: true, excusedAt: row.excusedAt.toISOString() };
+    if (!row.countsAgainstWorker)
+      throw new AppException(
+        'NOT_COUNTED',
+        409,
+        'This cancellation does not count against a worker, so there is nothing to excuse',
+      );
+    const excusedAt = new Date();
+    await this.prisma.jobCancellation.update({
+      where: { id },
+      data: { countsAgainstWorker: false, excusedAt },
+    });
+    return { id, excused: true, excusedAt: excusedAt.toISOString() };
   }
 
   /** Review queue, oldest first so nobody waits forever. */

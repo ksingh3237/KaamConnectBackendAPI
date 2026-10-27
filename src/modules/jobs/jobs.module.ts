@@ -9,6 +9,7 @@ import { WorkersModule } from '../workers/workers.module.js';
 import { DirectBookingService } from './direct-booking.service.js';
 import { JobEventsService } from './job-events.service.js';
 import { JobExpiryService } from './job-expiry.service.js';
+import { NoShowService } from './no-show.service.js';
 import { JobViewService } from './job-view.service.js';
 import { CustomerJobsController, JobsController } from './jobs.controller.js';
 import { JobsService } from './jobs.service.js';
@@ -35,6 +36,7 @@ import { WorkerCancellationsService } from './worker-cancellations.service.js';
     JobsService,
     DirectBookingService,
     JobExpiryService,
+    NoShowService,
     JobEventsService,
     JobViewService,
     WorkerBackOutService,

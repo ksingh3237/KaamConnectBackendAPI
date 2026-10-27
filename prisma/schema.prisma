@@ -138,6 +138,9 @@ enum NotificationType {
   JOB_CANCELLED_BY_WORKER // the assigned worker cancelled: the request is open again, or (data.reopened false) closed
   DIRECT_DECLINED // the worker a customer asked for personally said no
   DIRECT_EXPIRED // the worker a customer asked for personally never answered in time
+  JOB_WORKER_LATE // customer: the assigned worker has passed their arrival time
+  JOB_YOU_ARE_LATE // worker: you have passed your arrival time; the job is released automatically after the grace period
+  JOB_NO_SHOW_RELEASED // worker: the job was released because you did not arrive (counts as a cancellation)
 }
 
 // ───────────────────────── Identity & auth ─────────────────────────
@@ -433,6 +436,7 @@ model Job {
   arrivalAttempts    Int          @default(0) @map("arrival_attempts")
   arrivalCodeResets  Int          @default(0) @map("arrival_code_resets") // customer resets used for this assignment; CHECK >= 0, capped in code (MAX_ARRIVAL_CODE_RESETS)
   arrivalCodeResetAt DateTime?    @map("arrival_code_reset_at") @db.Timestamptz(3) // last reset, for the cooldown
+  lateNotifiedAt     DateTime?    @map("late_notified_at") @db.Timestamptz(3) // the "worker is late" notices went out; once per assignment, cleared when the job is re-opened
   expiresAt          DateTime?    @map("expires_at") @db.Timestamptz(3) // OPEN jobs auto-cancel (ASSUMPTION A-9)
   assignedAt         DateTime?    @map("assigned_at") @db.Timestamptz(3)
   arrivedAt          DateTime?    @map("arrived_at") @db.Timestamptz(3)
@@ -518,7 +522,7 @@ model JobCancellation {
   id                   String       @id @default(uuid(7)) @db.Uuid
   jobId                String       @map("job_id") @db.Uuid
   actorId              String?      @map("actor_id") @db.Uuid // who cancelled; kept as NULL if that account is deleted
-  actorRole            CancelledBy  @map("actor_role") // CUSTOMER or WORKER (CHECK: never SYSTEM)
+  actorRole            CancelledBy  @map("actor_role") // CUSTOMER or WORKER; SYSTEM only for a no-show release (actor_id is then NULL)
   workerId             String?      @map("worker_id") @db.Uuid // the worker the job was assigned to, null when nobody was yet
   stage                JobStatus // where the job was when it was cancelled: OPEN, ASSIGNED or ARRIVED
   reasonCode           String       @map("reason_code") @db.VarChar(40) // see jobs/cancel-reasons.ts
@@ -526,6 +530,7 @@ model JobCancellation {
   reopened             Boolean      @default(false) // a broadcast job went back to OPEN for new quotes
   countsAgainstWorker  Boolean      @default(false) @map("counts_against_worker") // a worker-side reason: feeds the repeat back-out warning
   visitFeeDue          Int?         @map("visit_fee_due") // INR, only when the worker had already arrived and it is not their doing
+  excusedAt            DateTime?    @map("excused_at") @db.Timestamptz(3) // an admin decided it should not count against the worker (counts_against_worker is then false)
   createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
 
   job   Job   @relation(fields: [jobId], references: [id])

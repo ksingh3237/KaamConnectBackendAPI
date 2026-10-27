@@ -28,6 +28,8 @@ export interface WorkerCancellationItem {
   /** The request went back to the customer for new quotes. */
   reopened: boolean;
   countsAgainstWorker: boolean;
+  /** The system released the job because the worker did not arrive (a no-show), not the worker's own cancel. */
+  bySystem: boolean;
   createdAt: string;
 }
 
@@ -39,6 +41,12 @@ export interface WorkerCancellations {
 
 const LIST_LIMIT = 20;
 
+/** A worker's own cancel, or the system's no-show release of their job: both are the worker's record. A customer's cancel is not. */
+const BY_OR_FOR_WORKER: CancelledBy[] = [
+  CancelledBy.WORKER,
+  CancelledBy.SYSTEM,
+];
+
 /** The worker's own cancellation history and the repeat back-out warning (docs/13-cancellation.md section 6). */
 @Injectable()
 export class WorkerCancellationsService {
@@ -48,8 +56,8 @@ export class WorkerCancellationsService {
     const since = new Date(now.getTime() - BACK_OUT_WINDOW_DAYS * 86_400_000);
     const recent = await this.prisma.jobCancellation.count({
       where: {
-        actorId: workerId,
-        actorRole: CancelledBy.WORKER,
+        workerId,
+        actorRole: { in: BY_OR_FOR_WORKER },
         countsAgainstWorker: true,
         createdAt: { gte: since },
       },
@@ -66,7 +74,7 @@ export class WorkerCancellationsService {
     const [summary, rows] = await Promise.all([
       this.summaryOf(workerId),
       this.prisma.jobCancellation.findMany({
-        where: { actorId: workerId, actorRole: CancelledBy.WORKER },
+        where: { workerId, actorRole: { in: BY_OR_FOR_WORKER } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: LIST_LIMIT,
         include: { job: { select: { jobNumber: true, title: true } } },
@@ -81,7 +89,8 @@ export class WorkerCancellationsService {
         title: r.job.title,
         stage: r.stage,
         reasonCode: r.reasonCode,
-        reason: r.note ?? labelOfReason('WORKER', r.reasonCode),
+        reason: r.note ?? labelOfReason(r.actorRole, r.reasonCode),
+        bySystem: r.actorRole === CancelledBy.SYSTEM,
         reopened: r.reopened,
         countsAgainstWorker: r.countsAgainstWorker,
         createdAt: r.createdAt.toISOString(),
