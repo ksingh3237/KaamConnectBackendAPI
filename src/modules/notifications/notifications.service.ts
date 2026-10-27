@@ -8,6 +8,7 @@ import type {
 } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { FIREBASE_MESSAGING } from './firebase.provider.js';
+import { pushOptionsFor } from './push-alert.js';
 import { safeReason } from './redact.js';
 
 const DEFAULT_LIMIT = 20;
@@ -124,12 +125,8 @@ export class NotificationsService {
           tokens: batch,
           notification: { title: input.title, body: input.body },
           data: stringData,
-          // One message serves every phone: each platform reads only its own block. `apns-priority 10` = deliver now.
-          android: { priority: 'high', notification: { channelId: 'default' } },
-          apns: {
-            headers: { 'apns-priority': '10' },
-            payload: { aps: { sound: 'default' } },
-          },
+          // Per type: a new lead rings the bell, the rest are a normal heads-up (push-alert.ts)
+          ...pushOptionsFor(input.type),
         });
         // Only tokens FCM says will never work again are removed. Temporary errors (unavailable, internal-error,
         // quota) keep the token, and so does `invalid-argument`, which can equally mean a bad payload.
