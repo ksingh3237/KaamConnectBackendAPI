@@ -160,7 +160,7 @@ export class WorkerBackOutService {
     // The worker is free again: ask their app for a fresh location (docs BR-21).
     this.events.workerFreed(workerId, jobId);
     this.events.statusChanged(fresh);
-    if (direct) this.events.directDeclined(fresh);
+    if (direct) this.events.directDeclined(fresh, { push: false }); // cancelledByWorker below is the one notice
     if (!closes) {
       this.events.jobReopened(fresh.customerId, jobId);
       await this.events.leadOpened(fresh);

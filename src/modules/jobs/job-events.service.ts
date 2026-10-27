@@ -143,11 +143,18 @@ export class JobEventsService {
     });
   }
 
-  /** The requested worker said no: the customer should pick someone else. Push + inbox, because the app may be closed. */
-  directDeclined(job: Participants & { title: string }): void {
+  /**
+   * The requested worker said no: the customer should pick someone else. Push + inbox as well, because the app may be
+   * closed; `push: false` when another message already tells the customer (a back-out sends the cancellation notice).
+   */
+  directDeclined(
+    job: Participants & { title: string },
+    options: { push: boolean } = { push: true },
+  ): void {
     this.publisher.toUser(job.customerId, RealtimeEvent.DIRECT_DECLINED, {
       jobId: job.id,
     });
+    if (!options.push) return;
     void this.notifications.sendPush(job.customerId, {
       type: NotificationType.DIRECT_DECLINED,
       title: 'The worker cannot take your request',

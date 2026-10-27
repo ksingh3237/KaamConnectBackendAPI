@@ -545,8 +545,42 @@ describe('direct booking "Book Pro": the worker must accept (decision D-3), e2e'
       });
       expect(row!.body).toContain('Geyser not working');
       expect(
-        t.messaging.sent.filter((m) => m.data.type === 'DIRECT_DECLINED'),
+        t.messaging.sent.filter(
+          (m) => m.data.type === 'DIRECT_DECLINED' && m.data.jobId === job.id,
+        ),
       ).toHaveLength(1);
+    });
+
+    it('a worker who backs out AFTER accepting a direct booking tells the customer once, not twice', async () => {
+      const customer = await customerIn(t);
+      const target = await verifiedWorkerIn(t);
+      const job = await bookOk(customer, target);
+      await giveDevice(customer.userId);
+      await accept(target, job.id).expect(200);
+
+      await http
+        .post(
+          `${JOBS}/${job.id}/cancel`,
+          { reasonCode: 'VEHICLE_PROBLEM' },
+          { token: target.accessToken },
+        )
+        .expect(200);
+
+      await new Promise((resolve) => setTimeout(resolve, 600)); // pushes are sent after the response
+      const rows = await t.prisma.inAppNotification.findMany({
+        where: { userId: customer.userId },
+        select: { type: true },
+      });
+      const types = rows.map((r) => r.type);
+      expect(types.filter((x) => x === 'JOB_CANCELLED_BY_WORKER')).toHaveLength(
+        1,
+      );
+      expect(types).not.toContain('DIRECT_DECLINED');
+      expect(
+        t.messaging.sent.filter(
+          (m) => m.data.type === 'DIRECT_DECLINED' && m.data.jobId === job.id,
+        ),
+      ).toHaveLength(0);
     });
 
     it('only the requested worker can decline, and only once', async () => {
