@@ -316,11 +316,15 @@ describe('notifications (e2e)', () => {
       expect([...sent.tokens].sort()).toEqual(
         [token('w-android'), token('w-iphone')].sort(),
       );
+      // a new lead rings the bell on both platforms
       expect(sent.apns).toEqual({
         headers: { 'apns-priority': '10' },
-        payload: { aps: { sound: 'default' } },
+        payload: { aps: { sound: 'new_lead.wav' } },
       });
-      expect(sent.android).toBeDefined();
+      expect(sent.android).toMatchObject({
+        priority: 'high',
+        notification: { channelId: 'new_leads', sound: 'new_lead' },
+      });
     });
 
     it('does not fail the booking when Firebase is down, and still fills the inbox', async () => {
