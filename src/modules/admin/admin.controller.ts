@@ -56,6 +56,15 @@ export class AdminController {
     return this.admin.cancellationFlags(query);
   }
 
+  /** Stops one cancellation (typically a no-show) from counting against the worker; the record stays (docs/15-no-show.md). */
+  @Post('cancellations/:id/excuse')
+  @HttpCode(200)
+  excuseCancellation(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ id: string; excused: true; excusedAt: string }> {
+    return this.admin.excuseCancellation(id);
+  }
+
   /** Sets how long a visit for one service is assumed to take (decision D-14); `null` clears it. */
   @Patch('service-categories/:id/duration')
   setDuration(

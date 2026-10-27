@@ -21,6 +21,16 @@ import { RealtimePublisher } from '../realtime/realtime-publisher.js';
 import { LeadDeliveryService } from '../scheduling/lead-delivery.service.js';
 import { leadPayloadOf, type JobRow } from './job-view.service.js';
 
+/** 'hh:mm am/pm' in Indian time, for the one place a notification names a clock time. */
+function clockTime(at: Date): string {
+  return at.toLocaleTimeString('en-IN', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  });
+}
+
 interface Participants {
   id: string;
   status: JobStatus;
@@ -143,17 +153,36 @@ export class JobEventsService {
     });
   }
 
-  /** The requested worker said no: the customer should pick someone else. */
-  directDeclined(job: Participants): void {
+  /**
+   * The requested worker said no: the customer should pick someone else. Push + inbox as well, because the app may be
+   * closed; `push: false` when another message already tells the customer (a back-out sends the cancellation notice).
+   */
+  directDeclined(
+    job: Participants & { title: string },
+    options: { push: boolean } = { push: true },
+  ): void {
     this.publisher.toUser(job.customerId, RealtimeEvent.DIRECT_DECLINED, {
       jobId: job.id,
+    });
+    if (!options.push) return;
+    void this.notifications.sendPush(job.customerId, {
+      type: NotificationType.DIRECT_DECLINED,
+      title: 'The worker cannot take your request',
+      body: `${job.title}: please choose another worker.`,
+      data: { jobId: job.id },
     });
   }
 
   /** Nobody answered the direct request in time. */
-  directExpired(job: Participants): void {
+  directExpired(job: Participants & { title: string }): void {
     this.publisher.toUser(job.customerId, RealtimeEvent.DIRECT_EXPIRED, {
       jobId: job.id,
+    });
+    void this.notifications.sendPush(job.customerId, {
+      type: NotificationType.DIRECT_EXPIRED,
+      title: 'The worker did not answer',
+      body: `${job.title}: please choose another worker.`,
+      data: { jobId: job.id },
     });
   }
 
@@ -295,6 +324,53 @@ export class JobEventsService {
       body: reopened
         ? `${job.title}: your request is open again, so you can choose another quote.${reason}`
         : `${job.title}.${reason}${fee}`,
+      data: { jobId: job.id, reopened },
+    });
+  }
+
+  /**
+   * The assigned worker has passed their promised arrival time (docs/15-no-show.md): both are told, once. The customer
+   * may keep waiting or cancel; the worker is warned when the job is released and what that means.
+   */
+  workerLate(
+    job: Participants & { title: string },
+    workerId: string,
+    releaseAt: Date,
+  ): void {
+    const at = clockTime(releaseAt);
+    void this.notifications.sendPush(job.customerId, {
+      type: NotificationType.JOB_WORKER_LATE,
+      title: 'Your worker is running late',
+      body: `${job.title}: they have not arrived yet. You can keep waiting or cancel. If they have not arrived by ${at}, the request is released automatically.`,
+      data: { jobId: job.id },
+    });
+    void this.notifications.sendPush(workerId, {
+      type: NotificationType.JOB_YOU_ARE_LATE,
+      title: 'You are late for a job',
+      body: `${job.title}: the customer is waiting. If you have not arrived by ${at} the job is released, and that counts as a cancellation.`,
+      data: { jobId: job.id },
+    });
+  }
+
+  /** The sweeper released an assigned job because the worker did not arrive: both are told (push + inbox). */
+  noShowReleased(
+    job: Participants & { title: string },
+    workerId: string,
+    reopened: boolean,
+  ): void {
+    void this.notifications.sendPush(job.customerId, {
+      type: NotificationType.JOB_CANCELLED_BY_WORKER,
+      title: 'Your worker did not arrive',
+      body: reopened
+        ? `${job.title}: your request is open again, so you can choose another quote.`
+        : `${job.title}: this request was closed. You can post it again.`,
+      data: { jobId: job.id, reopened },
+    });
+    void this.notifications.sendPush(workerId, {
+      type: NotificationType.JOB_NO_SHOW_RELEASED,
+      title: 'The job was released',
+      body: `${job.title}: you did not arrive in time, so it went back to the customer. This counts as a cancellation on your record.`,
+      // reopened: the job has left the worker's list, so the app opens Home instead of the job
       data: { jobId: job.id, reopened },
     });
   }

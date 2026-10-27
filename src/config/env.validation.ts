@@ -212,6 +212,13 @@ export class EnvVars {
   DELETION_LEDGER_FILE?: string;
 
   // --- Business configuration ---
+  // Minutes after the assigned worker's promised arrival (quoted ETA, or the booked start) before an assigned job that
+  // the worker has not arrived at is released automatically as a no-show (docs/15-no-show.md).
+  @Transform(toNumber)
+  @IsInt()
+  @Min(5)
+  NO_SHOW_GRACE_MIN: number = 30;
+
   @Transform(toNumber)
   @IsInt()
   @Min(1)

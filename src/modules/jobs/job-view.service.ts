@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { EnvVars } from '../../config/env.validation.js';
 import { referenceOf } from '../../common/utils/reference.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import {
@@ -81,6 +83,11 @@ export interface JobView {
   /** The appointment time the customer asked for; null = as soon as possible. */
   scheduledFor: string | null;
   durationMin: number;
+  /**
+   * While ASSIGNED: when the job is released automatically if the worker has not arrived (promised arrival + the grace
+   * period). The app shows "late" once the booking start has passed and counts down to this. Null otherwise.
+   */
+  noShowReleaseAt: string | null;
   /** Set once the booking is confirmed: the window the worker is reserved for. */
   booking: { startAt: string; endAt: string; confirmedAt: string } | null;
   category: { id: string; title: { en: string; hi: string; pa: string } };
@@ -121,12 +128,12 @@ export interface JobView {
   review?: ReviewView | null;
   /** Customer only, COMPLETED: true while the job has not been rated, so the app offers the review screen. */
   canReview?: boolean;
-  /** CANCELLED by a customer or a worker, both parties: why, and what (if anything) is owed. Absent for expiry and older rows. */
+  /** CANCELLED by a customer, a worker or the no-show sweeper, both parties: why, and what (if anything) is owed. Absent for expiry and older rows. */
   cancellation?: CancellationView;
 }
 
 export interface CancellationView {
-  by: 'CUSTOMER' | 'WORKER';
+  by: 'CUSTOMER' | 'WORKER' | 'SYSTEM';
   /** Where the job was: OPEN, ASSIGNED (on the way) or ARRIVED (on site). */
   stage: JobStatus;
   reasonCode: string;
@@ -154,6 +161,7 @@ export class JobViewService {
     private readonly media: MediaService,
     private readonly cards: WorkerCardService,
     private readonly reviews: ReviewsService,
+    private readonly config: ConfigService<EnvVars, true>,
   ) {}
 
   forCustomer(job: JobRow): Promise<JobView> {
@@ -185,6 +193,13 @@ export class JobViewService {
       timing: job.timing,
       scheduledFor: job.scheduledFor?.toISOString() ?? null,
       durationMin: job.durationMin,
+      noShowReleaseAt:
+        job.status === JobStatus.ASSIGNED && job.bookedStartAt
+          ? new Date(
+              job.bookedStartAt.getTime() +
+                this.config.get('NO_SHOW_GRACE_MIN', { infer: true }) * 60_000,
+            ).toISOString()
+          : null,
       booking:
         job.bookedStartAt && job.bookedEndAt && job.bookingConfirmedAt
           ? {
@@ -295,7 +310,7 @@ export class JobViewService {
       orderBy: { createdAt: 'desc' },
     });
     if (!row) return undefined;
-    const by = row.actorRole === CancelledBy.WORKER ? 'WORKER' : 'CUSTOMER';
+    const by = row.actorRole;
     return {
       by,
       stage: row.stage,

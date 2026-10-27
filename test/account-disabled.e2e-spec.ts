@@ -140,7 +140,7 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
 
   it('finds the routes it is meant to probe (so the test cannot pass by finding nothing)', () => {
     const protectedRoutes = routes.filter((r) => !r.isPublic);
-    expect(routes.length).toBe(82);
+    expect(routes.length).toBe(83);
     expect(protectedRoutes.length).toBeGreaterThanOrEqual(50);
     expect(
       protectedRoutes
@@ -154,6 +154,7 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
         'GET /admin/sos',
         'GET /admin/deletion-requests',
         'PATCH /admin/service-categories/:id/duration',
+        'POST /admin/cancellations/:id/excuse',
         'POST /admin/workers/:id/reject',
         'POST /admin/workers/:id/verify',
         'POST /admin/sos/:id/acknowledge',

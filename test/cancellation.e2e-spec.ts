@@ -653,7 +653,7 @@ describe('cancelling an assigned job (e2e)', () => {
     const insert = (data: Record<string, unknown>) =>
       t.prisma.jobCancellation.create({ data: data as never });
 
-    it('refuses a row the system wrote, a stage that cannot be cancelled, and incoherent flags', async () => {
+    it('refuses a system row with a person behind it or no worker, a stage that cannot be cancelled, and incoherent flags', async () => {
       const { jobId, worker } = await base();
       const ok = {
         jobId,
@@ -662,9 +662,13 @@ describe('cancelling an assigned job (e2e)', () => {
         stage: 'ASSIGNED',
         reasonCode: 'TOO_FAR',
       };
+      // The system may only record a no-show: no person behind it, and the worker it was assigned to (docs/15-no-show.md)
       await expect(insert({ ...ok, actorRole: 'SYSTEM' })).rejects.toThrow(
-        /job_cancellations_actor_role_person/,
+        /job_cancellations_system_has_no_actor/,
       );
+      await expect(
+        insert({ ...ok, actorRole: 'SYSTEM', actorId: null }),
+      ).rejects.toThrow(/job_cancellations_system_has_no_actor/);
       await expect(insert({ ...ok, stage: 'IN_PROGRESS' })).rejects.toThrow(
         /job_cancellations_stage_cancellable/,
       );
@@ -683,6 +687,16 @@ describe('cancelling an assigned job (e2e)', () => {
       expect(await rowsOf(jobId)).toHaveLength(0);
       await insert(ok);
       expect(await rowsOf(jobId)).toHaveLength(1);
+      await insert({
+        ...ok,
+        actorRole: 'SYSTEM',
+        actorId: null,
+        workerId: worker.userId,
+        reasonCode: 'NO_SHOW',
+        reopened: true,
+        countsAgainstWorker: true,
+      });
+      expect(await rowsOf(jobId)).toHaveLength(2);
     });
   });
 });

@@ -2,6 +2,8 @@ import { AppException } from '../../common/exceptions/app.exception.js';
 import { JobStatus } from '../../generated/prisma/enums.js';
 
 export type CancelActor = 'CUSTOMER' | 'WORKER';
+/** Who is on a cancellation record: the system itself only for a no-show release (docs/15-no-show.md). */
+export type RecordedActor = CancelActor | 'SYSTEM';
 
 interface ReasonRule {
   /** What the other person reads ("Your worker cancelled: Vehicle problem"). */
@@ -105,6 +107,10 @@ export const CUSTOMER_REASONS = {
   OTHER: { label: 'Other reason', workerFault: false, reopens: false },
 } as const satisfies Record<string, ReasonRule>;
 
+/** The one reason the system gives: the assigned worker did not arrive. It is the worker's doing and re-opens a broadcast job. */
+export const NO_SHOW_CODE = 'NO_SHOW';
+export const NO_SHOW_LABEL = 'The worker did not arrive in time';
+
 /** Every code either side may send: the request body is checked against this before the service runs. */
 export const ALL_REASON_CODES: readonly string[] = [
   ...new Set([
@@ -177,10 +183,23 @@ export function resolveReason(
   };
 }
 
+/** The reason recorded when the sweeper releases a job: a person never sends this code (it is not in ALL_REASON_CODES). */
+export function noShowReason(): ResolvedReason {
+  return {
+    code: NO_SHOW_CODE,
+    label: NO_SHOW_LABEL,
+    note: null,
+    workerFault: true,
+    reopens: true,
+    text: NO_SHOW_LABEL,
+  };
+}
+
 /** The label for a stored code, for lists; unknown codes (older rows, a newer server) show as the code itself. */
-export function labelOfReason(actor: CancelActor, code: string): string {
+export function labelOfReason(actor: RecordedActor, code: string): string {
+  if (code === NO_SHOW_CODE) return NO_SHOW_LABEL;
   const table: Record<string, ReasonRule> =
-    actor === 'WORKER' ? WORKER_REASONS : CUSTOMER_REASONS;
+    actor === 'CUSTOMER' ? CUSTOMER_REASONS : WORKER_REASONS;
   return (
     table[code]?.label ?? (code === UNSPECIFIED ? 'No reason given' : code)
   );
