@@ -302,6 +302,13 @@ const CASES: Case[] = [
     wrongRole: [],
   },
   {
+    route: 'DELETE /notifications/:id',
+    resource: 'notification',
+    path: (_ids, id) => `${V1}/notifications/${id}`,
+    strangers: ['B', 'W', 'X', 'Z', 'D'],
+    wrongRole: [],
+  },
+  {
     route: 'POST /customers/me/addresses/:id/primary',
     resource: 'address',
     path: (_ids, id) => `${V1}/customers/me/addresses/${id}/primary`,
@@ -590,7 +597,7 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       unclassified: [...registered].filter((r) => !classified.has(r)).sort(),
       stale: [...classified].filter((r) => !registered.has(r)).sort(),
     }).toEqual({ unclassified: [], stale: [] });
-    expect(registered.size).toBe(41);
+    expect(registered.size).toBe(42);
   });
 
   describe.each(CASES)('$route', (c) => {
