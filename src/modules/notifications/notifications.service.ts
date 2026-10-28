@@ -224,4 +224,20 @@ export class NotificationsService {
     });
     return { updated: r.count };
   }
+
+  /** The inbox is a convenience copy; the job itself keeps the record, so removing a row is a plain delete. */
+  async remove(userId: string, id: string): Promise<void> {
+    const r = await this.prisma.inAppNotification.deleteMany({
+      where: { id, userId },
+    });
+    if (r.count === 0)
+      throw new AppException('NOT_FOUND', 404, 'Notification not found');
+  }
+
+  async clearAll(userId: string): Promise<{ deleted: number }> {
+    const r = await this.prisma.inAppNotification.deleteMany({
+      where: { userId },
+    });
+    return { deleted: r.count };
+  }
 }

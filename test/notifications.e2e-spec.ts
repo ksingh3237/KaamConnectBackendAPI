@@ -5,6 +5,7 @@
 import request from 'supertest';
 import { seedReferenceData } from '../prisma/seed/reference-data.js';
 import { AccountDeletionService } from '../src/modules/account/account-deletion.service.js';
+import { NotificationsCleanupService } from '../src/modules/notifications/notifications-cleanup.service.js';
 import { NotificationsService } from '../src/modules/notifications/notifications.service.js';
 import { api, createTestApp, freshIp, type TestApp } from './helpers/app.js';
 import { loginAs, type LoggedIn } from './helpers/auth.js';
@@ -80,6 +81,8 @@ describe('notifications (e2e)', () => {
       await http.get(`${NOTES}/unread-count`).expect(401);
       await http.patch(`${NOTES}/read-all`).expect(401);
       await http.patch(`${NOTES}/${id}/read`).expect(401);
+      await http.delete(`${NOTES}/${id}`).expect(401);
+      await http.delete(NOTES).expect(401);
       await http
         .post(`${NOTES}/device-token`, {
           token: token('a'),
@@ -161,6 +164,71 @@ describe('notifications (e2e)', () => {
       expect(
         (await http.get(`${NOTES}/unread-count`, as(a)).expect(200)).body.count,
       ).toBe(1);
+    });
+
+    it('deletes one of the caller’s notifications and answers 404 for someone else’s or a missing one', async () => {
+      const a = await loginAs(t, nextPhone());
+      const b = await loginAs(t, nextPhone());
+      const mine = await give(a.userId, 'mine');
+      await give(a.userId, 'keep');
+      const theirs = await give(b.userId, 'theirs');
+
+      await http.delete(`${NOTES}/${theirs.id}`, as(a)).expect(404);
+      expect(await inbox(b)).toHaveLength(1);
+
+      await http.delete(`${NOTES}/${mine.id}`, as(a)).expect(204);
+      expect((await inbox(a)).map((n) => n.title)).toEqual(['keep']);
+      // Already gone: the same answer as an id that never existed
+      await http.delete(`${NOTES}/${mine.id}`, as(a)).expect(404);
+      await http.delete(`${NOTES}/not-a-uuid`, as(a)).expect((r) => {
+        expect([400, 422]).toContain(r.status);
+      });
+    });
+
+    it('clear-all empties the caller’s inbox and nobody else’s', async () => {
+      const a = await loginAs(t, nextPhone());
+      const b = await loginAs(t, nextPhone());
+      await give(a.userId, 'a1');
+      await give(a.userId, 'a2', true);
+      await give(b.userId, 'b1');
+
+      const res = await http.delete(NOTES, as(a)).expect(200);
+      expect(res.body).toEqual({ deleted: 2 });
+      expect(await inbox(a)).toEqual([]);
+      expect(
+        (await http.get(`${NOTES}/unread-count`, as(a)).expect(200)).body.count,
+      ).toBe(0);
+      expect(await inbox(b)).toHaveLength(1);
+      await http.delete(NOTES).expect(401);
+    });
+
+    it('purges read notifications after 30 days and any after 90, never a recent unread one', async () => {
+      const a = await loginAs(t, nextPhone());
+      const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000);
+      const make = (title: string, isRead: boolean, days: number) =>
+        t.prisma.inAppNotification.create({
+          data: {
+            userId: a.userId,
+            type: 'NEW_QUOTE',
+            title,
+            body: 'body',
+            isRead,
+            createdAt: daysAgo(days),
+          },
+        });
+      await make('read 40d', true, 40);
+      await make('unread 40d', false, 40);
+      await make('read 10d', true, 10);
+      await make('unread 100d', false, 100);
+      await make('unread 1d', false, 1);
+
+      const removed = await t.app.get(NotificationsCleanupService).purge();
+      expect(removed).toBe(2);
+      expect((await inbox(a)).map((n) => n.title).sort()).toEqual([
+        'read 10d',
+        'unread 1d',
+        'unread 40d',
+      ]);
     });
 
     it('rejects a malformed id before touching the database', async () => {

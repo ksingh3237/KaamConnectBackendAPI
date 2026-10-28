@@ -70,6 +70,22 @@ export class NotificationsController {
     return this.notifications.markAllRead(user.id);
   }
 
+  @Delete()
+  clearAll(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ deleted: number }> {
+    return this.notifications.clearAll(user.id);
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    await this.notifications.remove(user.id, id);
+  }
+
   @Patch(':id/read')
   @HttpCode(204)
   async markRead(
