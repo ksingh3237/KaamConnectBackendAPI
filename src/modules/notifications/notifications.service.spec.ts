@@ -51,9 +51,10 @@ describe('NotificationsService.sendPush', () => {
         data: { type: 'NEW_QUOTE', jobId: 'job-1' },
         // both platforms are served by the one message
         android: expect.objectContaining({ priority: 'high' }),
+        // NEW_QUOTE is one of the loud ones: the customer is waiting for exactly this (push-alert.ts ALERT_TYPES)
         apns: {
           headers: { 'apns-priority': '10' },
-          payload: { aps: { sound: 'default' } },
+          payload: { aps: { sound: 'new_lead.wav' } },
         },
       }),
     );
