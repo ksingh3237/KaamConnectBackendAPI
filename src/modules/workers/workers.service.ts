@@ -10,7 +10,7 @@ import {
 import type { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { CatalogService } from '../catalog/catalog.service.js';
-import { MediaPurpose } from '../media/media-rules.js';
+import { MediaPurpose, READ_URL_TTL_SEC } from '../media/media-rules.js';
 import { MediaService } from '../media/media.service.js';
 import type { UpdateWorkerDto, UpsertWorkerDto } from './dto/worker.dto.js';
 import { WorkerVerificationService } from './worker-verification.service.js';
@@ -223,6 +223,25 @@ export class WorkersService {
       await this.verification.autoApproveIfEligible(tx, userId);
     });
     return this.get(userId);
+  }
+
+  /**
+   * A short-lived link to one of the worker's OWN Aadhaar images, so the app can show back what was
+   * uploaded. The storage key never leaves the server; only this signed URL does, and only to its owner.
+   */
+  async documentUrl(
+    userId: string,
+    type: DocumentType,
+  ): Promise<{ url: string; expiresInSec: number }> {
+    const document = await this.prisma.workerDocument.findUnique({
+      where: { workerId_type: { workerId: userId, type } },
+      select: { storageKey: true },
+    });
+    const url = document
+      ? await this.media.readUrl(MediaPurpose.AADHAAR, document.storageKey)
+      : null;
+    if (!url) throw new AppException('NOT_FOUND', 404, 'No such document on file');
+    return { url, expiresInSec: READ_URL_TTL_SEC };
   }
 
   /** Latest GPS fix. Fixes arriving faster than LOCATION_MIN_INTERVAL_MS are acknowledged but dropped. */

@@ -389,6 +389,8 @@ const EXEMPT: Record<string, string> = {
     'a verified worker profile is public to every customer by design; unverified ones are 404 (tested below)',
   'PUT /workers/me/documents/:type':
     ':type is a fixed list (AADHAAR_FRONT / AADHAAR_BACK), not an object id; it always acts on the caller',
+  'GET /workers/me/documents/:type/url':
+    'same fixed list; the link it signs is always for the caller’s own document (workers.e2e-spec)',
   'GET /dev-storage/:bucket/*key':
     'development stand-in for S3, authorised by a signed URL (media.e2e-spec)',
   'PUT /dev-storage/:bucket/*key':
@@ -597,7 +599,7 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       unclassified: [...registered].filter((r) => !classified.has(r)).sort(),
       stale: [...classified].filter((r) => !registered.has(r)).sort(),
     }).toEqual({ unclassified: [], stale: [] });
-    expect(registered.size).toBe(42);
+    expect(registered.size).toBe(43);
   });
 
   describe.each(CASES)('$route', (c) => {

@@ -1,5 +1,6 @@
+import request from 'supertest';
 import { seedReferenceData } from '../prisma/seed/reference-data.js';
-import { api, createTestApp, type TestApp } from './helpers/app.js';
+import { api, createTestApp, freshIp, type TestApp } from './helpers/app.js';
 import { resetDatabase } from './helpers/db.js';
 import {
   anAreaId,
@@ -491,7 +492,8 @@ describe('worker profile, documents and location (e2e, MANUAL verification = pro
       });
     });
 
-    it('never exposes the stored key or a link to the Aadhaar image to the worker or anyone else', async () => {
+    // The one way to see the picture is GET documents/:type/url below: a short-lived signed link, owner only.
+    it('never puts the stored key or an Aadhaar link in a profile response', async () => {
       const w = await onboardedWorker(t);
       const stored = await t.prisma.workerDocument.findMany({
         where: { workerId: w.userId },
@@ -510,6 +512,36 @@ describe('worker profile, documents and location (e2e, MANUAL verification = pro
         expect(body).not.toContain('AADHAAR/');
         expect(body).not.toContain('/dev-storage/private');
       }
+    });
+
+    it('gives the worker a short-lived link to their own document, so the app can show it back', async () => {
+      const w = await onboardedWorker(t);
+      const res = await http
+        .get(`${ME}/documents/AADHAAR_FRONT/url`, { token: w.accessToken })
+        .expect(200);
+
+      expect(res.body.expiresInSec).toBe(600);
+      expect(res.body.url).toContain('/dev-storage/private/');
+      expect(res.body.url).toContain('sig=');
+
+      // and the link really serves the bytes that were uploaded
+      const url = new URL(res.body.url);
+      await request(t.app.getHttpServer())
+        .get(url.pathname + url.search)
+        .set('X-Forwarded-For', freshIp())
+        .expect(200);
+    });
+
+    it('is nobody else’s to read, and 404s for a side that was never uploaded', async () => {
+      const w = await worker(); // a worker profile with no documents yet
+      await http
+        .get(`${ME}/documents/AADHAAR_FRONT/url`, { token: w.accessToken })
+        .expect(404);
+
+      const stranger = await newUser(t);
+      await http
+        .get(`${ME}/documents/AADHAAR_FRONT/url`, { token: stranger.accessToken })
+        .expect(403);
     });
 
     it('replacing a side keeps one row per side', async () => {
