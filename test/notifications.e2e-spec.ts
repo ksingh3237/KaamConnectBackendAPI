@@ -391,7 +391,7 @@ describe('notifications (e2e)', () => {
       });
       expect(sent.android).toMatchObject({
         priority: 'high',
-        notification: { channelId: 'new_leads', sound: 'new_lead' },
+        notification: { channelId: 'new_leads_v2', sound: 'new_lead' },
       });
     });
 

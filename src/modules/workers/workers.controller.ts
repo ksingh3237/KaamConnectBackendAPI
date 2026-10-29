@@ -61,6 +61,16 @@ export class WorkersController {
     return this.workers.setDocument(user.id, type, dto.key);
   }
 
+  /** The worker's own copy of a document they uploaded, as a short-lived signed link. */
+  @RequireProfile('worker')
+  @Get('documents/:type/url')
+  documentUrl(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('type', new ParseEnumPipe(DocumentType)) type: DocumentType,
+  ): Promise<{ url: string; expiresInSec: number }> {
+    return this.workers.documentUrl(user.id, type);
+  }
+
   // --- Live location ---
   // Verified workers send it for lead matching; a worker in review may still send it while they are on the
   // way to or at a job (decision D-8). The service enforces which.
