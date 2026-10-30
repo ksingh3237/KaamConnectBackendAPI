@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 import type { PrismaService } from '../../prisma/prisma.service.js';
 import { parseServiceAccount } from './firebase.provider.js';
 import { NotificationsService } from './notifications.service.js';
+import { PushTexts } from './push-texts.js';
 
 const push = {
   type: 'NEW_QUOTE' as const,
@@ -14,6 +15,7 @@ const push = {
 function build(responses: { error?: { code: string } }[] = []) {
   const prisma = {
     inAppNotification: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    user: { findMany: vi.fn().mockResolvedValue([]) },
     deviceToken: {
       findMany: vi
         .fn()
@@ -104,6 +106,96 @@ describe('NotificationsService.sendPush', () => {
     const { prisma, service } = build();
     await service.sendPushToMany([], push);
     expect(prisma.inAppNotification.createMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('NotificationsService: each person reads it in their own language', () => {
+  const lead = {
+    type: 'NEW_LEAD' as const,
+    ...PushTexts.newLead('Tap leaking'),
+    data: { jobId: 'job-1' },
+  };
+  const inboxRows = (prisma: ReturnType<typeof build>['prisma']) =>
+    prisma.inAppNotification.createMany.mock.calls.flatMap(
+      (c: { data: { userId: string; title: string; body: string }[] }[]) =>
+        c[0].data,
+    );
+
+  it('sends Hindi to Hindi readers, Punjabi to Punjabi readers and English to the rest', async () => {
+    const { prisma, messaging, service } = build([{}]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 'h', language: 'hi' },
+      { id: 'p', language: 'pa' },
+      { id: 'e', language: 'en' },
+    ]);
+    await service.sendPushToMany(['h', 'p', 'e', 'gone'], lead);
+
+    const byUser = Object.fromEntries(
+      inboxRows(prisma).map((r) => [r.userId, r.title]),
+    );
+    expect(byUser).toEqual({
+      h: 'आपके पास नया काम',
+      p: 'ਤੁਹਾਡੇ ਨੇੜੇ ਨਵਾਂ ਕੰਮ',
+      e: 'New job near you',
+      gone: 'New job near you', // no user row (deleted meanwhile): English
+    });
+    // What the person typed is never translated
+    expect(new Set(inboxRows(prisma).map((r) => r.body))).toEqual(
+      new Set(['Tap leaking']),
+    );
+    const titles = messaging.sendEachForMulticast.mock.calls.map(
+      (c: { notification: { title: string } }[]) => c[0].notification.title,
+    );
+    expect(titles.sort()).toEqual(
+      ['New job near you', 'आपके पास नया काम', 'ਤੁਹਾਡੇ ਨੇੜੇ ਨਵਾਂ ਕੰਮ'].sort(),
+    );
+    // The translations are not stored as data and never reach the phone's payload
+    for (const c of messaging.sendEachForMulticast.mock.calls)
+      expect(c[0].data).toEqual({ type: 'NEW_LEAD', jobId: 'job-1' });
+  });
+
+  it('falls back to English for everyone when the languages cannot be read', async () => {
+    const { prisma, service } = build([{}]);
+    prisma.user.findMany.mockRejectedValue(new Error('db down'));
+    await service.sendPushToMany(['h', 'p'], lead);
+
+    expect(inboxRows(prisma).map((r) => r.title)).toEqual([
+      'New job near you',
+      'New job near you',
+    ]);
+  });
+
+  it('does not look languages up for a notification that has no translations', async () => {
+    const { prisma, service } = build([{}]);
+    await service.sendPush('u1', push);
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('PushTexts', () => {
+  it('translates a reason picked from the list, keeps typed words, and never shows the old BACKED_OUT marker', () => {
+    const listed = PushTexts.cancelledByWorker(
+      'Geyser',
+      'Vehicle problem',
+      true,
+      null,
+    );
+    expect(listed.body).toContain('Reason: Vehicle problem.');
+    expect(listed.translations.hi.body).toContain('कारण: गाड़ी में खराबी');
+    expect(listed.translations.pa.body).toContain('ਕਾਰਨ: ਗੱਡੀ ਵਿੱਚ ਖ਼ਰਾਬੀ');
+
+    const typed = PushTexts.cancelledByCustomer('Geyser', 'gas khatam', 200);
+    expect(typed.translations.hi.body).toContain('gas khatam');
+    expect(typed.translations.hi.body).toContain('₹200');
+
+    const marker = PushTexts.cancelledByWorker(
+      'Geyser',
+      'BACKED_OUT',
+      true,
+      null,
+    );
+    for (const copy of [marker, marker.translations.hi, marker.translations.pa])
+      expect(copy.body).not.toContain('BACKED_OUT');
   });
 });
 

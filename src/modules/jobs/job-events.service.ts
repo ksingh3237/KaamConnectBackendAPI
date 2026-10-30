@@ -6,6 +6,7 @@ import {
 } from '../../generated/prisma/enums.js';
 import { MatchingService, spotOfJob } from '../matching/matching.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { PushTexts } from '../notifications/push-texts.js';
 import {
   RealtimeEvent,
   type ArrivalCodeResetPayload,
@@ -73,24 +74,21 @@ export class JobEventsService {
       case JobStatus.ASSIGNED:
         void this.notifications.sendPush(job.customerId, {
           type: NotificationType.WORKER_EN_ROUTE,
-          title: 'Your worker is on the way',
-          body: 'Track them live and keep your arrival code ready.',
+          ...PushTexts.workerEnRoute(),
           data,
         });
         break;
       case JobStatus.ARRIVED:
         void this.notifications.sendPush(job.customerId, {
           type: NotificationType.WORKER_ARRIVED,
-          title: 'Your worker has arrived',
-          body: 'They will share the bill for your approval before starting.',
+          ...PushTexts.workerArrived(),
           data,
         });
         break;
       case JobStatus.WORK_COMPLETED:
         void this.notifications.sendPush(job.customerId, {
           type: NotificationType.WORK_COMPLETED,
-          title: 'Work completed',
-          body: 'Please review the bill and pay your worker directly.',
+          ...PushTexts.workCompleted(),
           data,
         });
         break;
@@ -125,8 +123,7 @@ export class JobEventsService {
     }
     void this.notifications.sendPushToMany([...fresh], {
       type: NotificationType.NEW_LEAD,
-      title: 'New job near you',
-      body: job.title,
+      ...PushTexts.newLead(job.title),
       data: { jobId: job.id },
     });
     return covering.length;
@@ -147,8 +144,7 @@ export class JobEventsService {
     );
     void this.notifications.sendPush(targetWorkerId, {
       type: NotificationType.DIRECT_REQUEST,
-      title: 'A customer asked for you',
-      body: job.title,
+      ...PushTexts.directRequest(job.title),
       data: { jobId: job.id },
     });
   }
@@ -167,8 +163,7 @@ export class JobEventsService {
     if (!options.push) return;
     void this.notifications.sendPush(job.customerId, {
       type: NotificationType.DIRECT_DECLINED,
-      title: 'The worker cannot take your request',
-      body: `${job.title}: please choose another worker.`,
+      ...PushTexts.directDeclined(job.title),
       data: { jobId: job.id },
     });
   }
@@ -180,8 +175,7 @@ export class JobEventsService {
     });
     void this.notifications.sendPush(job.customerId, {
       type: NotificationType.DIRECT_EXPIRED,
-      title: 'The worker did not answer',
-      body: `${job.title}: please choose another worker.`,
+      ...PushTexts.directExpired(job.title),
       data: { jobId: job.id },
     });
   }
@@ -250,8 +244,7 @@ export class JobEventsService {
     );
     void this.notifications.sendPush(job.workerId, {
       type: NotificationType.BOOKING_CONFIRMED,
-      title: 'Booking confirmed',
-      body: 'A customer chose you. Open the job to head over.',
+      ...PushTexts.bookingConfirmed(),
       data: { jobId: job.id },
     });
   }
@@ -266,8 +259,7 @@ export class JobEventsService {
     this.publisher.toUser(customerId, RealtimeEvent.BILL_UPDATED, payload);
     void this.notifications.sendPush(customerId, {
       type: NotificationType.BILL_CREATED,
-      title: 'Your bill is ready',
-      body: `Total ₹${total}. Review it and approve to start the work.`,
+      ...PushTexts.billReady(total),
       data: { jobId },
     });
   }
@@ -289,14 +281,9 @@ export class JobEventsService {
   ): void {
     const worker = job.workerId ?? job.targetWorkerId;
     if (!worker) return;
-    const fee =
-      visitFeeDue !== null && visitFeeDue > 0
-        ? ` The visit fee of ₹${visitFeeDue} is payable to you directly.`
-        : '';
     void this.notifications.sendPush(worker, {
       type: NotificationType.JOB_CANCELLED_BY_CUSTOMER,
-      title: 'The customer cancelled the job',
-      body: `${job.title}${text ? `: ${text}` : ''}.${fee}`,
+      ...PushTexts.cancelledByCustomer(job.title, text, visitFeeDue),
       data: { jobId: job.id },
     });
   }
@@ -311,19 +298,9 @@ export class JobEventsService {
     reopened: boolean,
     visitFeeDue: number | null,
   ): void {
-    const reason = text ? ` Reason: ${text}.` : '';
-    const fee =
-      visitFeeDue !== null && visitFeeDue > 0
-        ? ` The visit fee of ₹${visitFeeDue} is payable to the worker directly.`
-        : '';
     void this.notifications.sendPush(job.customerId, {
       type: NotificationType.JOB_CANCELLED_BY_WORKER,
-      title: reopened
-        ? 'Your worker cannot make it'
-        : 'Your worker cancelled the job',
-      body: reopened
-        ? `${job.title}: your request is open again, so you can choose another quote.${reason}`
-        : `${job.title}.${reason}${fee}`,
+      ...PushTexts.cancelledByWorker(job.title, text, reopened, visitFeeDue),
       data: { jobId: job.id, reopened },
     });
   }
@@ -340,14 +317,12 @@ export class JobEventsService {
     const at = clockTime(releaseAt);
     void this.notifications.sendPush(job.customerId, {
       type: NotificationType.JOB_WORKER_LATE,
-      title: 'Your worker is running late',
-      body: `${job.title}: they have not arrived yet. You can keep waiting or cancel. If they have not arrived by ${at}, the request is released automatically.`,
+      ...PushTexts.workerLate(job.title, at),
       data: { jobId: job.id },
     });
     void this.notifications.sendPush(workerId, {
       type: NotificationType.JOB_YOU_ARE_LATE,
-      title: 'You are late for a job',
-      body: `${job.title}: the customer is waiting. If you have not arrived by ${at} the job is released, and that counts as a cancellation.`,
+      ...PushTexts.youAreLate(job.title, at),
       data: { jobId: job.id },
     });
   }
@@ -360,16 +335,12 @@ export class JobEventsService {
   ): void {
     void this.notifications.sendPush(job.customerId, {
       type: NotificationType.JOB_CANCELLED_BY_WORKER,
-      title: 'Your worker did not arrive',
-      body: reopened
-        ? `${job.title}: your request is open again, so you can choose another quote.`
-        : `${job.title}: this request was closed. You can post it again.`,
+      ...PushTexts.noShowCustomer(job.title, reopened),
       data: { jobId: job.id, reopened },
     });
     void this.notifications.sendPush(workerId, {
       type: NotificationType.JOB_NO_SHOW_RELEASED,
-      title: 'The job was released',
-      body: `${job.title}: you did not arrive in time, so it went back to the customer. This counts as a cancellation on your record.`,
+      ...PushTexts.noShowWorker(job.title),
       // reopened: the job has left the worker's list, so the app opens Home instead of the job
       data: { jobId: job.id, reopened },
     });

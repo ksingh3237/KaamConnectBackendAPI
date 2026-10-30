@@ -10,7 +10,7 @@ import {
   type Customer,
   type Worker,
 } from './marketplace.js';
-import { customerPayload, workerPayload } from './personas.js';
+import { customerPayload, uploadFile, workerPayload } from './personas.js';
 import { acceptQuote, scheduledJob } from './scheduling.js';
 
 export const V1 = '/api/v1';
@@ -56,6 +56,42 @@ export function approveBill(
   );
 }
 
+/** The worker uploads one work photo of `kind` and adds it to the job, the way the app does. */
+export async function addProofPhoto(
+  t: TestApp,
+  worker: Worker,
+  jobId: string,
+  kind: 'BEFORE' | 'AFTER',
+) {
+  const { key } = await uploadFile(t, worker.accessToken, 'WORK_PROOF');
+  await api(t.app)
+    .post(
+      `${V1}/jobs/${jobId}/work-photos`,
+      { kind, key },
+      { token: worker.accessToken },
+    )
+    .expect(201);
+}
+
+/**
+ * One "before" and one "after" photo on the job (real uploads, so deleting an account later finds real files).
+ * Finishing the work requires both; a side that already has one is left alone.
+ */
+export async function withProofPhotos(
+  t: TestApp,
+  worker: Worker,
+  jobId: string,
+) {
+  for (const kind of ['BEFORE', 'AFTER'] as const) {
+    const stored = kind === 'BEFORE' ? 'BEFORE_PHOTO' : 'AFTER_PHOTO';
+    if (
+      (await t.prisma.jobMedia.count({ where: { jobId, kind: stored } })) === 0
+    )
+      await addProofPhoto(t, worker, jobId, kind);
+  }
+}
+
+/** "Work complete". The server refuses it until the job has its proof photos: call `withProofPhotos` first. */
 export function completeWork(t: TestApp, worker: Worker, jobId: string) {
   return api(t.app).post(
     `${V1}/jobs/${jobId}/complete-work`,
@@ -128,6 +164,7 @@ export async function finished(
   extra = 300,
 ) {
   const made = await underWay(t, customer, worker, extra);
+  await withProofPhotos(t, worker, made.job.id);
   await completeWork(t, worker, made.job.id).expect(200);
   return made;
 }

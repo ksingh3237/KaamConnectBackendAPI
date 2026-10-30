@@ -151,6 +151,13 @@ const CASES: Case[] = [
     ...CUSTOMER_ROUTE,
   },
   {
+    route: 'POST /jobs/:id/offers/:offerId/decline',
+    resource: 'open',
+    path: (ids, id) => `${V1}/jobs/${id}/offers/${ids.offerOnOpen}/decline`,
+    body: {},
+    ...CUSTOMER_ROUTE,
+  },
+  {
     route: 'POST /jobs/:id/arrival-code/reset',
     resource: 'assigned',
     path: job('/arrival-code/reset'),
@@ -599,7 +606,7 @@ describe('IDOR matrix: every route with an id, called by people who do not own i
       unclassified: [...registered].filter((r) => !classified.has(r)).sort(),
       stale: [...classified].filter((r) => !registered.has(r)).sort(),
     }).toEqual({ unclassified: [], stale: [] });
-    expect(registered.size).toBe(43);
+    expect(registered.size).toBe(44);
   });
 
   describe.each(CASES)('$route', (c) => {
