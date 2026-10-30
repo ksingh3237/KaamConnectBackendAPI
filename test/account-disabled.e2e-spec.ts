@@ -140,7 +140,7 @@ describe('K-5: a disabled account is refused on every protected route (e2e)', ()
 
   it('finds the routes it is meant to probe (so the test cannot pass by finding nothing)', () => {
     const protectedRoutes = routes.filter((r) => !r.isPublic);
-    expect(routes.length).toBe(86);
+    expect(routes.length).toBe(87);
     expect(protectedRoutes.length).toBeGreaterThanOrEqual(50);
     expect(
       protectedRoutes

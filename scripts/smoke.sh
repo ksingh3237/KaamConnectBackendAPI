@@ -135,6 +135,10 @@ BILL="$(curl -sf -X PUT "$BASE/api/v1/jobs/$JOB_ID/bill-items" -H "$W_AUTH" -H "
 [ "$(echo "$BILL" | json 'v.total')" = "550" ] || fail "bill total is not 550"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/v1/jobs/$JOB_ID/bill/approve" -H "$C_AUTH" -H "$JSON" -d '{"expectedTotal":250}')" = "409" ]   || fail "approving a stale total was not refused"
 curl -sf -X POST "$BASE/api/v1/jobs/$JOB_ID/bill/approve" -H "$C_AUTH" -H "$JSON" -d '{"expectedTotal":550}' >/dev/null || fail "approve bill"
+# Proof of work is compulsory: one "before" and one "after" photo, or complete-work is refused (409 WORK_PHOTOS_REQUIRED)
+for kind in BEFORE AFTER; do
+  curl -sf -X POST "$BASE/api/v1/jobs/$JOB_ID/work-photos" -H "$W_AUTH" -H "$JSON"     -d "{\"kind\":\"$kind\",\"key\":\"$(upload "$W_TOKEN" WORK_PROOF)\"}" >/dev/null || fail "work photo $kind"
+done
 [ "$(curl -sf -X POST "$BASE/api/v1/jobs/$JOB_ID/complete-work" -H "$W_AUTH" -H "$JSON" -d '{}' | json 'v.status')" = "WORK_COMPLETED" ]   || fail "complete-work"
 PAID="$(curl -sf -X POST "$BASE/api/v1/jobs/$JOB_ID/payment" -H "$C_AUTH" -H "$JSON" -d '{"method":"UPI"}')" || fail "payment"
 [ "$(echo "$PAID" | json 'v.amount')" = "550" ] || fail "payment amount is not the bill total"

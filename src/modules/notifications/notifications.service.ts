@@ -4,11 +4,13 @@ import { AppException } from '../../common/exceptions/app.exception.js';
 import { decodeCursor, toPage, type Page } from '../../common/utils/cursor.js';
 import type {
   DevicePlatform,
+  Language,
   NotificationType,
 } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { FIREBASE_MESSAGING } from './firebase.provider.js';
 import { pushOptionsFor } from './push-alert.js';
+import type { PushCopy } from './push-texts.js';
 import { safeReason } from './redact.js';
 
 const DEFAULT_LIMIT = 20;
@@ -31,6 +33,11 @@ export interface PushInput {
   type: NotificationType;
   /** Deep-link context (job id and the like). Never an address or a phone number. */
   data?: Record<string, DataValue>;
+  /**
+   * The same notification in Hindi and Punjabi (push-texts.ts). Each recipient gets the language they chose in the
+   * app (`users.language`); `title` / `body` above are the English text. Without it everyone gets `title` / `body`.
+   */
+  translations?: Record<Exclude<Language, 'en'>, PushCopy>;
 }
 
 export interface NotificationItem {
@@ -66,6 +73,46 @@ export class NotificationsService {
   ): Promise<void> {
     const ids = [...new Set(userIds)];
     if (ids.length === 0) return;
+    for (const group of await this.inTheirLanguage(ids, input))
+      await this.deliver(group.ids, group.input);
+  }
+
+  /**
+   * Splits the recipients by the language each one chose, with the text in that language. If the languages cannot be
+   * read, everyone still gets the English text: a notification in the wrong language beats no notification.
+   */
+  private async inTheirLanguage(
+    ids: string[],
+    input: PushInput,
+  ): Promise<{ ids: string[]; input: PushInput }[]> {
+    const { translations, ...english } = input;
+    if (!translations) return [{ ids, input: english }];
+    let rows: { id: string; language: Language }[];
+    try {
+      rows = await this.prisma.user.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, language: true },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Could not read the language of ${ids.length} user(s) for ${input.type}: ${safeReason(error)}`,
+      );
+      return [{ ids, input: english }];
+    }
+    const languageOf = new Map(rows.map((r) => [r.id, r.language]));
+    const groups = new Map<Language, string[]>();
+    for (const id of ids) {
+      const language = languageOf.get(id) ?? 'en';
+      groups.set(language, [...(groups.get(language) ?? []), id]);
+    }
+    return [...groups].map(([language, members]) => ({
+      ids: members,
+      input:
+        language === 'en' ? english : { ...english, ...translations[language] },
+    }));
+  }
+
+  private async deliver(ids: string[], input: PushInput): Promise<void> {
     const message: PushInput = {
       ...input,
       // Column limits (VARCHAR 120 / 300): a long value must never cost the whole notification

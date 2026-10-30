@@ -22,6 +22,8 @@ import {
   assigned,
   bothProfiles,
   completeWork,
+  addProofPhoto,
+  withProofPhotos,
   customerIn,
   finished,
   onSite,
@@ -236,6 +238,15 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       await putItems(t, worker, made.job.id, []).expect(200);
       await approveBill(t, customer, made.job.id, VISIT_FEE).expect(200);
 
+      // Proof of work is compulsory: no photos, or only a "before" one, is refused.
+      const none = await completeWork(t, worker, made.job.id).expect(409);
+      expect(none.body.code).toBe('WORK_PHOTOS_REQUIRED');
+      await addProofPhoto(t, worker, made.job.id, 'BEFORE');
+      const half = await completeWork(t, worker, made.job.id).expect(409);
+      expect(half.body.code).toBe('WORK_PHOTOS_REQUIRED');
+      expect(await statusOf(t, made.job.id)).toBe('IN_PROGRESS');
+      await withProofPhotos(t, worker, made.job.id);
+
       const events = await listen(customer);
       const done = await completeWork(t, worker, made.job.id).expect(200);
       expect(done.body.status).toBe('WORK_COMPLETED');
@@ -256,6 +267,7 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
 
       // Not before the work is done, and the amount cannot be sent by the app.
       await payFor(t, customer, made.job.id).expect(409);
+      await withProofPhotos(t, worker, made.job.id);
       await completeWork(t, worker, made.job.id).expect(200);
       await http
         .post(
@@ -476,6 +488,7 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
           { kind: 'LABOUR', description: 'Fix', amount: 100 },
         ]).expect(200);
         await approveBill(t, customer, job.id, VISIT_FEE + 100).expect(200);
+        await withProofPhotos(t, worker, job.id);
         await completeWork(t, worker, job.id).expect(200);
         await payFor(t, customer, job.id).expect(200);
         expect(await statusOf(t, job.id)).toBe('COMPLETED');
@@ -613,6 +626,7 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       expect(await statusOf(t, job.id)).toBe('ARRIVED');
 
       await approveBill(t, customer, job.id, VISIT_FEE).expect(200);
+      await withProofPhotos(t, worker, job.id);
       await completeWork(t, worker, job.id).expect(200);
       expect((await payFor(t, worker as never, job.id)).status).toBe(403);
       expect((await payFor(t, otherCustomer, job.id)).status).toBe(404);
@@ -645,6 +659,7 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       expect(inbox.matching('location.refresh')).toEqual([]);
 
       // ...as soon as the work is done, they can, and their app is asked for a fresh location.
+      await withProofPhotos(t, worker, made.job.id);
       await completeWork(t, worker, made.job.id).expect(200);
       const [refresh] = await inbox.waitFor('location.refresh');
       expect(refresh).toEqual({ reason: 'JOB_ENDED', jobId: made.job.id });

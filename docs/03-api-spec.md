@@ -162,7 +162,7 @@ Reads: responses embed short-lived signed GET URLs (`photoUrl`, `voiceNoteUrl`, 
 | `POST /jobs/:id/arrival` | assigned worker (ASSIGNED) | `{ code }` → ARRIVED. 5 wrong tries ⇒ `423`-style `429 CODE_LOCKED` |
 | `PUT /jobs/:id/bill-items` | assigned worker (ARRIVED) | Replaces non-visit-fee items: `[{ kind: PARTS\|LABOUR\|OTHER, description, amount }]`; visit-fee item is added automatically at acceptance |
 | `POST /jobs/:id/work-photos` | assigned worker | `{ kind: "BEFORE"\|"AFTER", key }` |
-| `POST /jobs/:id/complete-work` | assigned worker (IN_PROGRESS) | → WORK_COMPLETED |
+| `POST /jobs/:id/complete-work` | assigned worker (IN_PROGRESS) | → WORK_COMPLETED. Needs at least one BEFORE and one AFTER work photo (`409 WORK_PHOTOS_REQUIRED`) |
 | `POST /jobs/:id/payment/confirm` | assigned worker | P3: worker confirms receipt (no UI yet) |
 | `POST /jobs/:id/cancel` | assigned worker (ASSIGNED or ARRIVED) | Q-5: from ASSIGNED a worker-side reason re-opens the job and marks that worker's offer WITHDRAWN; a customer-side reason, a direct booking, or any cancel from ARRIVED closes it. See `docs/13-cancellation.md` |
 
@@ -367,6 +367,7 @@ Everything is under `/api/v1` and needs a login. "Needs" is the profile the call
 | `POST /jobs/:id/cancel` `{reasonCode?, reason?}` | customer (owner) | OPEN, ASSIGNED or ARRIVED → CANCELLED; waiting quotes are rejected. The assigned worker is told by push and inbox (`docs/13-cancellation.md`) |
 | `GET /jobs/:id/offers?sort=fee\|eta` | customer (owner) | Compare Offers: live quotes (waiting or accepted) with a worker card each, `isFastest`, and (§10) `available`, `startsAt`, `nextFreeAt` |
 | `POST /jobs/:id/offers/:offerId/accept` | customer (owner) | → `{status:"ASSIGNED", arrivalCode, booking:{startAt,endAt,confirmedAt}, worker}`; `409 WORKER_UNAVAILABLE` if the worker has since taken a clashing booking (§10) |
+| `POST /jobs/:id/offers/:offerId/decline` | customer (owner) | Turns one waiting quote down (the Decline button beside Accept): → `{offerId, status:"REJECTED"}`; the worker gets `offer.rejected` and may quote again. `409 JOB_NOT_OPEN` once the job is not OPEN, `409 OFFER_NOT_PENDING` if the quote is no longer waiting, `404` for another job's quote |
 | `POST /jobs/:id/direct/accept` · `/direct/decline` | the requested worker | Answers a direct booking → job view |
 | `GET /leads?filter=all\|immediate&categoryId=&limit=&cursor=` | verified worker | Leads Radar (§9.2) |
 | `GET /leads/:id` | verified worker | Full lead: photos, voice note; never the address or a phone |
@@ -548,7 +549,7 @@ Everything is under `/api/v1`. **Who may call what is decided by owning the job*
 | `GET /jobs/:id/bill` | the customer or the assigned worker | `{jobId, status, items[{id,kind,description,amount}], platformFee:0, total, approved, payTo:{name, upiId}}`. `409 BILL_NOT_AVAILABLE` until a worker is chosen |
 | `POST /jobs/:id/bill/approve` `{expectedTotal}` | job's customer, job ARRIVED | The customer approves the total **they were shown**. If the bill has changed: `409 BILL_CHANGED` and nothing happens. Success → IN_PROGRESS and the items freeze (a later edit is `409`). *This differs from the first draft, which had no body* |
 | `POST /jobs/:id/work-photos` `{kind:"BEFORE"\|"AFTER", key}` | assigned worker, job ARRIVED or IN_PROGRESS | `key` from `POST /media/presign` with purpose `WORK_PROOF`, uploaded by this worker. At most 5 per kind (`409 PHOTO_LIMIT`); the same key twice is one photo. `201 {before:[url], after:[url]}`. The customer and the worker see them as `workPhotos` in `GET /jobs/:id` |
-| `POST /jobs/:id/complete-work` | assigned worker, job IN_PROGRESS | → WORK_COMPLETED. Frees the worker's calendar and sends them `location.refresh` |
+| `POST /jobs/:id/complete-work` | assigned worker, job IN_PROGRESS, with at least one BEFORE and one AFTER work photo (else `409 WORK_PHOTOS_REQUIRED`) | → WORK_COMPLETED. Frees the worker's calendar and sends them `location.refresh` |
 | `POST /jobs/:id/payment` `{method:"UPI"\|"CASH"}` | job's customer, job WORK_COMPLETED | Records the payment; **the amount is the bill total, computed on the server** (an `amount` in the body is rejected with `422`). → COMPLETED. Idempotent: a second call (even with the other method, or many at once) returns the first payment unchanged. `{jobId,status,receiptNo,method,amount,platformFee:0,markedAt}` |
 | `GET /jobs/:id/receipt` | the customer or the assigned worker, job COMPLETED | `{receiptNo:"KC-10042", date, jobTitle, customer:{name}, worker:{name}, items[], platformFee:0, total, method}`. No phone, no address. `409 RECEIPT_NOT_AVAILABLE` before payment |
 | `GET /jobs/:id/tracking` | the customer or the assigned worker, job ASSIGNED to WORK_COMPLETED | See §11.3 |

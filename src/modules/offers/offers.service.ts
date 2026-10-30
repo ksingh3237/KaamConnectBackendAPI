@@ -12,6 +12,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { generateArrivalCode } from '../jobs/arrival-code.js';
 import { JobEventsService } from '../jobs/job-events.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { PushTexts } from '../notifications/push-texts.js';
 import { jobInclude } from '../jobs/job-view.service.js';
 import { transition } from '../jobs/state/job-state-machine.js';
 import { VISIBLE_TO_CUSTOMER } from './visible-offers.js';
@@ -347,6 +348,41 @@ export class OffersService {
   }
 
   /**
+   * "Decline" beside "Accept Offer": the customer turns one quote down while the request is still open. The quote
+   * becomes REJECTED (hidden from the customer, like the ones that lose when another is accepted) and the worker is
+   * told live through `offer.rejected`. As with any rejected quote, the worker may quote again, for example cheaper.
+   * Racing an accept is safe: the accept only takes a quote that is still PENDING, inside its own transaction.
+   */
+  async decline(
+    customerId: string,
+    jobId: string,
+    offerId: string,
+  ): Promise<{ offerId: string; status: OfferStatus }> {
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, customerId },
+      select: { status: true, targetWorkerId: true },
+    });
+    if (!job) throw notFound('Job');
+    const offer = await this.prisma.offer.findFirst({
+      where: { id: offerId, jobId },
+      select: { workerId: true },
+    });
+    if (!offer) throw notFound('Quote');
+    if (job.status !== JobStatus.OPEN) throw jobNotOpen();
+
+    const declined = await this.prisma.offer.updateMany({
+      where: { id: offerId, status: OfferStatus.PENDING },
+      data: { status: OfferStatus.REJECTED },
+    });
+    if (declined.count !== 1) throw offerNotPending();
+    this.publisher.toUser(offer.workerId, RealtimeEvent.OFFER_REJECTED, {
+      jobId,
+      offerId,
+    });
+    return { offerId, status: OfferStatus.REJECTED };
+  }
+
+  /**
    * "Accept Offer": assigns the worker. One transaction decides everything; the conditional update on the
    * job is the lock, so two simultaneous accepts (or accept vs. cancel/expiry) have exactly one winner.
    */
@@ -613,8 +649,11 @@ export class OffersService {
     if (event === RealtimeEvent.OFFER_NEW)
       void this.notifications.sendPush(customerId, {
         type: NotificationType.NEW_QUOTE,
-        title: 'New quote received',
-        body: `${worker.fullName} quoted ₹${offer.visitFee}, arriving in ${offer.etaMinutes} min.`,
+        ...PushTexts.newQuote(
+          worker.fullName,
+          offer.visitFee,
+          offer.etaMinutes,
+        ),
         data: { jobId: offer.jobId, offerId: offer.id },
       });
   }

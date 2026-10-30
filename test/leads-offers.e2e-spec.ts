@@ -1113,4 +1113,85 @@ describe('leads and quotes (e2e, real PostgreSQL)', () => {
       }
     });
   });
+
+  describe('POST /jobs/:id/offers/:offerId/decline', () => {
+    const decline = (
+      customer: { accessToken: string },
+      jobId: string,
+      offerId: string,
+    ) =>
+      http.post(
+        `${JOBS}/${jobId}/offers/${offerId}/decline`,
+        {},
+        { token: customer.accessToken },
+      );
+
+    it("turns one quote down: it leaves the customer's list, the others stay, the job stays open", async () => {
+      const customer = await customerIn(t);
+      const a = await verifiedWorkerIn(t);
+      const b = await verifiedWorkerIn(t);
+      const job = await postJob(t, customer);
+      const qa = await sendQuote(t, a, job.id);
+      const qb = await sendQuote(t, b, job.id);
+
+      const res = await decline(customer, job.id, qa.id).expect(200);
+      expect(res.body).toEqual({ offerId: qa.id, status: 'REJECTED' });
+
+      const list = await http
+        .get(`${JOBS}/${job.id}/offers`, { token: customer.accessToken })
+        .expect(200);
+      expect(list.body.map((o: { offerId: string }) => o.offerId)).toEqual([
+        qb.id,
+      ]);
+      const row = await t.prisma.job.findUniqueOrThrow({
+        where: { id: job.id },
+      });
+      expect(row.status).toBe('OPEN');
+      // The declined quote can no longer be accepted; the other one still can.
+      expect(
+        (await accept(customer, job.id, qa.id).expect(409)).body.code,
+      ).toBe('OFFER_NOT_PENDING');
+      await accept(customer, job.id, qb.id).expect(200);
+    });
+
+    it('refuses twice, after the job was assigned, and on a quote that is not on this job', async () => {
+      const customer = await customerIn(t);
+      const a = await verifiedWorkerIn(t);
+      const b = await verifiedWorkerIn(t);
+      const job = await postJob(t, customer);
+      const other = await postJob(t, customer);
+      const qa = await sendQuote(t, a, job.id);
+      const qb = await sendQuote(t, b, job.id);
+      const elsewhere = await sendQuote(t, a, other.id);
+
+      await decline(customer, job.id, qa.id).expect(200);
+      expect(
+        (await decline(customer, job.id, qa.id).expect(409)).body.code,
+      ).toBe('OFFER_NOT_PENDING');
+      await decline(customer, job.id, elsewhere.id).expect(404);
+
+      await accept(customer, job.id, qb.id).expect(200);
+      expect(
+        (await decline(customer, job.id, qb.id).expect(409)).body.code,
+      ).toBe('JOB_NOT_OPEN');
+      expect(
+        (await t.prisma.offer.findUniqueOrThrow({ where: { id: qb.id } }))
+          .status,
+      ).toBe('ACCEPTED');
+    });
+
+    it("is a 404 for someone else's job", async () => {
+      const customer = await customerIn(t);
+      const stranger = await customerIn(t);
+      const worker = await verifiedWorkerIn(t);
+      const job = await postJob(t, customer);
+      const quote = await sendQuote(t, worker, job.id);
+
+      await decline(stranger, job.id, quote.id).expect(404);
+      expect(
+        (await t.prisma.offer.findUniqueOrThrow({ where: { id: quote.id } }))
+          .status,
+      ).toBe('PENDING');
+    });
+  });
 });

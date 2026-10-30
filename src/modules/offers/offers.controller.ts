@@ -27,6 +27,7 @@ import {
   type LeadDetail,
   type LeadItem,
 } from './leads.service.js';
+import type { OfferStatus } from '../../generated/prisma/enums.js';
 import type { OfferSummary } from './offer-views.js';
 import {
   OffersService,
@@ -138,5 +139,16 @@ export class JobOffersController {
     @Param('offerId', ParseUUIDPipe) offerId: string,
   ): Promise<AcceptedJob> {
     return this.offers.accept(user.id, id, offerId);
+  }
+
+  /** "Decline": turns one quote down while the request is open; the worker is told live. */
+  @Post(':offerId/decline')
+  @HttpCode(200)
+  decline(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+  ): Promise<{ offerId: string; status: OfferStatus }> {
+    return this.offers.decline(user.id, id, offerId);
   }
 }
