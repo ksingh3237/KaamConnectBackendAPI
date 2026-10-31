@@ -71,6 +71,20 @@ describe('direct booking "Book Pro": the worker must accept (decision D-3), e2e'
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   };
+  /** The phone push goes out a moment after the inbox row is saved, so wait (briefly) for it too. */
+  const pushesOf = async (
+    type: 'DIRECT_DECLINED' | 'DIRECT_EXPIRED',
+    jobId: string,
+  ) => {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const sent = t.messaging.sent.filter(
+        (m) => m.data.type === type && m.data.jobId === jobId,
+      );
+      if (sent.length > 0 || Date.now() > deadline) return sent;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
   /** Without a registered phone nothing is pushed (the inbox row is still written). */
   const giveDevice = (userId: string) =>
     t.prisma.deviceToken.create({
@@ -544,11 +558,7 @@ describe('direct booking "Book Pro": the worker must accept (decision D-3), e2e'
         data: { jobId: job.id },
       });
       expect(row!.body).toContain('Geyser not working');
-      expect(
-        t.messaging.sent.filter(
-          (m) => m.data.type === 'DIRECT_DECLINED' && m.data.jobId === job.id,
-        ),
-      ).toHaveLength(1);
+      expect(await pushesOf('DIRECT_DECLINED', job.id)).toHaveLength(1);
     });
 
     it('a worker who backs out AFTER accepting a direct booking tells the customer once, not twice', async () => {
