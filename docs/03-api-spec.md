@@ -118,7 +118,7 @@ Reads: responses embed short-lived signed GET URLs (`photoUrl`, `voiceNoteUrl`, 
 
 | Method & path | Auth | Notes |
 |---|---|---|
-| `POST /jobs` | customer | Body below → `201 { id, jobNumber, status: "OPEN", notifiedWorkers: 24 }`. Rejects unknown category/area (422). Sets `expiresAt = now + JOB_OPEN_TTL_HOURS` |
+| `POST /jobs` | customer | Body below → `201 { id, jobNumber, status: "OPEN", notifiedWorkers: 24 }`. Rejects unknown category/area (422). Sets `expiresAt = now + IMMEDIATE_JOB_OPEN_TTL_MIN` (120 min) for `timing: IMMEDIATE`, else `now + JOB_OPEN_TTL_HOURS` |
 | `GET /customers/me/jobs?tab=ongoing\|completed\|cancelled` | customer | Activity tabs + counts in `meta.counts` (the "Cancelled (0)" label) |
 | `GET /jobs/:id` | job's customer or assigned worker | Role-shaped view (§3) |
 | `GET /jobs/:id/offers` | customer owner | Compare screen: `[{ offerId, visitFee, etaMinutes, message, isFastest, worker: {…card…} }]` sorted by fee/eta. Live updates: socket event `offer.new` / `offer.updated` (§6) |
@@ -409,7 +409,7 @@ Lead card fields: `id, reference, title, category{id,title{en,hi,pa}}, customerN
 
 | Timer | Value | Result |
 |---|---|---|
-| Broadcast request unanswered | `JOB_OPEN_TTL_HOURS` (24 h) | `CANCELLED`, `cancelledBy=SYSTEM`, `cancelReason=EXPIRED`, waiting quotes rejected |
+| Broadcast request unanswered | `IMMEDIATE_JOB_OPEN_TTL_MIN` (2 h) for IMMEDIATE, `JOB_OPEN_TTL_HOURS` (24 h) otherwise | `CANCELLED`, `cancelledBy=SYSTEM`, `cancelReason=EXPIRED`, waiting quotes rejected |
 | Direct request unanswered | `DIRECT_ACCEPT_TTL_MIN` (10 min) | same |
 | Assigned worker has not arrived | promised arrival (`booked_start_at`) + `NO_SHOW_GRACE_MIN` (30 min) | released: a broadcast job goes back to `OPEN`, a direct booking is `CANCELLED` with `cancelledBy=SYSTEM`; recorded as a no-show that counts against the worker (docs/15-no-show.md) |
 

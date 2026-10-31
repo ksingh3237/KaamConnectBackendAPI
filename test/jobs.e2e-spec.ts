@@ -52,10 +52,10 @@ describe('jobs: posting, reading, listing, cancelling, expiry (e2e, real Postgre
         status: 'OPEN',
         notifiedWorkers: 2,
       });
-      const ttlHours =
-        (new Date(job.expiresAt).getTime() - Date.now()) / 3_600_000;
-      expect(ttlHours).toBeGreaterThan(23.9);
-      expect(ttlHours).toBeLessThan(24.1);
+      // A request for right now (the default) stops taking quotes after two hours, not a whole day
+      const ttlMin = (new Date(job.expiresAt).getTime() - Date.now()) / 60_000;
+      expect(ttlMin).toBeGreaterThan(119);
+      expect(ttlMin).toBeLessThan(121);
 
       const second = await postJob(t, customer);
       expect(second.jobNumber).toBe(10001);
