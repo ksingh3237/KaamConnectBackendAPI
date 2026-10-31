@@ -5,6 +5,7 @@ import type { EnvVars } from '../../config/env.validation.js';
 import {
   CancelledBy,
   JobStatus,
+  JobTiming,
   LeadResponse,
   OfferStatus,
 } from '../../generated/prisma/enums.js';
@@ -166,6 +167,7 @@ export class WorkerBackOutService {
                 job.scheduledFor,
                 false,
                 readOpenTtl(this.config),
+                job.timing === JobTiming.IMMEDIATE,
               ),
             },
       });

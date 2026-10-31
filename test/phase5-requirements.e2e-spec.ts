@@ -820,9 +820,12 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       expect(
         await t.prisma.billItem.count({ where: { jobId: s.job.id } }),
       ).toBe(0);
-      // It can be answered again for a full day (a fresh deadline, not the old one).
+      // It can be answered again for a fresh window (a request for right now: two hours from the re-opening).
       expect(row.expiresAt!.getTime()).toBeGreaterThan(
-        Date.now() + 23 * 60 * MINUTE,
+        Date.now() + 119 * MINUTE,
+      );
+      expect(row.expiresAt!.getTime()).toBeGreaterThanOrEqual(
+        before.expiresAt!.getTime(),
       );
 
       // The database constraints held at every step: no OPEN job carries a worker or a window.

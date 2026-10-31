@@ -229,6 +229,12 @@ export class EnvVars {
   @Min(1)
   DIRECT_ACCEPT_TTL_MIN: number = 10;
 
+  /** A request for "now" (IMMEDIATE) stops taking quotes after this many minutes: by then the need has passed. */
+  @Transform(toNumber)
+  @IsInt()
+  @Min(15)
+  IMMEDIATE_JOB_OPEN_TTL_MIN: number = 120;
+
   @Transform(toNumber)
   @IsNumber()
   @Min(1)

@@ -7,6 +7,7 @@ import {
   CancelledBy,
   JobMediaKind,
   JobStatus,
+  JobTiming,
   OfferStatus,
   VerificationStatus,
 } from '../../generated/prisma/enums.js';
@@ -167,6 +168,7 @@ export class JobsService {
       now,
       scheduledFor,
       directWorkerId !== undefined,
+      dto.timing === JobTiming.IMMEDIATE,
     );
 
     const job = await this.prisma.job.create({
@@ -443,14 +445,22 @@ export class JobsService {
   /**
    * When a request stops accepting answers. A direct request lapses after DIRECT_ACCEPT_TTL_MIN; a
    * request for an exact time keeps collecting quotes for up to SCHEDULED_JOB_OPEN_TTL_HOURS but never
-   * past its own appointment; everything else after JOB_OPEN_TTL_HOURS.
+   * past its own appointment; a request for right now after IMMEDIATE_JOB_OPEN_TTL_MIN; everything else
+   * after JOB_OPEN_TTL_HOURS.
    */
   private expiryFor(
     now: Date,
     scheduledFor: Date | null,
     direct: boolean,
+    immediate: boolean,
   ): Date {
-    return openUntil(now, scheduledFor, direct, readOpenTtl(this.config));
+    return openUntil(
+      now,
+      scheduledFor,
+      direct,
+      readOpenTtl(this.config),
+      immediate,
+    );
   }
 
   private async counts(customerId: string): Promise<Record<JobTab, number>> {
