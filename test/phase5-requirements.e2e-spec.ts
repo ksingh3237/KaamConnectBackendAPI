@@ -18,6 +18,7 @@ import {
   V1,
   VISIT_FEE,
   approveBill,
+  appointmentDue,
   arriveAt,
   assigned,
   bothProfiles,
@@ -1120,6 +1121,7 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       const c2 = await customerIn(t);
       await onSite(t, c1, worker);
       const second = await scheduledOnSite(t, c2, worker, 30 * 60);
+      await appointmentDue(t, second.job.id);
 
       const refused = await arriveAt(
         t,
@@ -1142,6 +1144,8 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       const c2 = await customerIn(t);
       const a = await scheduledOnSite(t, c1, worker, 24 * 60);
       const b = await scheduledOnSite(t, c2, worker, 48 * 60);
+      await appointmentDue(t, a.job.id);
+      await appointmentDue(t, b.job.id);
 
       // Two arrivals at the same instant: the friendly check may pass for both, so the database decides.
       const results = await Promise.all([
@@ -1177,11 +1181,28 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       ).toBe(true);
     });
 
-    it('arriving at a job whose booking window has not started yet is allowed (early) but still respects the one-at-a-time rule', async () => {
+    it('arriving more than an hour before the appointment is refused (TOO_EARLY, no try used); inside the hour it works and the one-at-a-time rule still holds', async () => {
       const worker = await verifiedWorkerIn(t);
       const c1 = await customerIn(t);
       const c2 = await customerIn(t);
       const early = await scheduledOnSite(t, c1, worker, 5 * 60); // an appointment five hours away
+      const tooSoon = await arriveAt(
+        t,
+        worker,
+        early.job.id,
+        early.code,
+      ).expect(409);
+      expect(tooSoon.body.code).toBe('TOO_EARLY');
+      expect(tooSoon.body.message).toContain('booked for');
+      const untouched = await t.prisma.job.findUniqueOrThrow({
+        where: { id: early.job.id },
+      });
+      expect([untouched.status, untouched.arrivalAttempts]).toEqual([
+        'ASSIGNED',
+        0,
+      ]);
+
+      await appointmentDue(t, early.job.id, 55); // 55 minutes to go: inside the 60-minute window
       const arrived = await arriveAt(
         t,
         worker,
@@ -1191,6 +1212,7 @@ describe('Phase 5 requirements carried over from scheduling (e2e, real PostgreSQ
       expect(arrived.body.status).toBe('ARRIVED');
 
       const later = await scheduledOnSite(t, c2, worker, 30 * 60);
+      await appointmentDue(t, later.job.id);
       expect(
         (await arriveAt(t, worker, later.job.id, later.code).expect(409)).body
           .code,

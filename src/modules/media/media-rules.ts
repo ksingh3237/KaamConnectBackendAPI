@@ -52,6 +52,8 @@ export const MEDIA_RULES: Record<MediaPurpose, PurposeRule> = {
 
 export const UPLOAD_URL_TTL_SEC = 300;
 export const READ_URL_TTL_SEC = 600;
+/** Read links are re-signed only once per this step, so repeated calls return the same link (no image reload). */
+export const READ_URL_STABLE_SEC = 300;
 export const ADMIN_READ_URL_TTL_SEC = 300;
 
 /** Keys are namespaced by owner and purpose: `u/<userId>/<PURPOSE>/<uuid>.<ext>`. */

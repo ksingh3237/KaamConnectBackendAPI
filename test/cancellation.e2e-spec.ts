@@ -10,6 +10,7 @@ import { nextPhone } from './helpers/factories.js';
 import {
   V1,
   VISIT_FEE,
+  appointmentDue,
   arriveAt,
   assigned,
   onSite,
@@ -23,7 +24,13 @@ import {
   type Customer,
   type Worker,
 } from './helpers/marketplace.js';
-import { book } from './helpers/scheduling.js';
+import {
+  acceptQuote,
+  book,
+  feedOf,
+  scheduledJob,
+} from './helpers/scheduling.js';
+import { sendQuote } from './helpers/marketplace.js';
 
 describe('cancelling an assigned job (e2e)', () => {
   let t: TestApp;
@@ -123,6 +130,52 @@ describe('cancelling an assigned job (e2e)', () => {
           (m) => m.data.type === 'JOB_CANCELLED_BY_WORKER',
         ),
       );
+    });
+
+    it('a personal emergency puts the lead back in front of the other workers: radar, push, and the losing worker may quote again; the one who left may not', async () => {
+      const customer = await customerIn(t);
+      const leaver = await verifiedWorkerIn(t);
+      const other = await verifiedWorkerIn(t);
+      await giveDevice(other.userId);
+      const job = await scheduledJob(t, customer, 26 * 60); // a "tomorrow" style appointment
+      const lost = await sendQuote(t, other, job.id, { visitFee: 300 });
+      const won = await sendQuote(t, leaver, job.id, { visitFee: 200 });
+      await acceptQuote(t, customer, job.id, won.id).expect(200);
+      expect((await feedOf(t, other)).map((l) => l.id)).not.toContain(job.id);
+      t.messaging.reset();
+
+      await cancel(leaver, job.id, { reasonCode: 'PERSONAL_EMERGENCY' }).expect(
+        200,
+      );
+
+      const row = await jobOf(job.id);
+      expect([row.status, row.workerId]).toEqual(['OPEN', null]);
+      // Still keeps the customer's appointment, and stays open for quotes until it
+      expect(row.scheduledFor?.toISOString()).toBe(job.scheduledFor);
+      expect(row.expiresAt!.getTime()).toBeGreaterThan(Date.now());
+
+      expect((await feedOf(t, other)).map((l) => l.id)).toContain(job.id);
+      await eventually(async () =>
+        t.messaging.sent.filter(
+          (m) => m.data.type === 'NEW_LEAD' && m.data.jobId === job.id,
+        ),
+      );
+      // The old losing quote is not revived (its time may no longer hold); the worker sends a fresh one
+      expect(
+        (await t.prisma.offer.findUniqueOrThrow({ where: { id: lost.id } }))
+          .status,
+      ).toBe('REJECTED');
+      const again = await sendQuote(t, other, job.id, { visitFee: 280 });
+      expect(again).toMatchObject({ id: lost.id, status: 'PENDING' });
+
+      expect((await feedOf(t, leaver)).map((l) => l.id)).not.toContain(job.id);
+      await http
+        .post(
+          `${V1}/leads/${job.id}/offers`,
+          { visitFee: 150, etaMinutes: 15 },
+          { token: leaver.accessToken },
+        )
+        .expect(409);
     });
 
     it('a customer-side reason (customer not answering) closes the request instead of re-broadcasting it, and does not count against the worker', async () => {
@@ -315,6 +368,7 @@ describe('cancelling an assigned job (e2e)', () => {
       const later = await book(t, await customerIn(t), worker, 300);
       const first = await onSite(t, customer, worker);
       const laterCode = later.accepted.arrivalCode as string;
+      await appointmentDue(t, later.job.id); // its hour has come: arriving is not refused as too early
 
       // While the first is on site the worker cannot arrive anywhere else...
       await arriveAt(t, worker, later.job.id, laterCode)

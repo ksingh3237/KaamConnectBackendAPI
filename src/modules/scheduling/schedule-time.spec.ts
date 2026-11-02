@@ -93,6 +93,23 @@ describe('resolveScheduledFor', () => {
     });
   });
 
+  it('AFTERNOON posted in the evening is refused, not turned into "in 30 minutes"', () => {
+    for (const at of ['2026-10-12T19:30:00', '2026-10-12T20:40:00']) {
+      expect(
+        resolveScheduledFor(JobTiming.AFTERNOON, undefined, ist(at), LIMITS),
+      ).toMatchObject({ ok: false, issue: expect.stringContaining('over') });
+    }
+    // 19:29 + 30 minutes is still inside the afternoon
+    expect(
+      resolveScheduledFor(
+        JobTiming.AFTERNOON,
+        undefined,
+        ist('2026-10-12T19:29:00'),
+        LIMITS,
+      ),
+    ).toEqual({ ok: true, scheduledFor: ist('2026-10-12T19:59:00') });
+  });
+
   it('AFTERNOON accepts an exact time only for today between 12:00 and 20:00', () => {
     const pick = (t: string) =>
       resolveScheduledFor(JobTiming.AFTERNOON, ist(t), NOW, LIMITS).ok;

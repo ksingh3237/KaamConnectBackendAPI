@@ -182,6 +182,17 @@ export async function scheduledOnSite(
   return { job, offer, code: accepted.body.arrivalCode as string };
 }
 
+/**
+ * Time passes: the appointment is now `minutes` away, inside the window in which the worker may arrive
+ * (EARLY_ARRIVAL_MIN, 60). Only the requested time moves; the booked calendar slot stays as it was.
+ */
+export async function appointmentDue(t: TestApp, jobId: string, minutes = 20) {
+  await t.prisma.job.update({
+    where: { id: jobId },
+    data: { scheduledFor: new Date(Date.now() + minutes * 60_000) },
+  });
+}
+
 /** One login that holds BOTH a customer and a worker profile (the app lets a person switch modes). */
 export async function bothProfiles(t: TestApp, area = 'Sector 22') {
   const me = await loginAs(t, nextPhone());
