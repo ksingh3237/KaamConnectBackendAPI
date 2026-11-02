@@ -2,7 +2,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ConfigService } from '@nestjs/config';
 import type { EnvVars } from '../../../config/env.validation.js';
+import { afterEach, vi } from 'vitest';
 import { LocalStorageService } from './local-storage.service.js';
+import { signingWindow } from './storage.service.js';
 
 function serviceWith(secret = 'a'.repeat(40)) {
   const values: Record<string, unknown> = {
@@ -123,5 +125,60 @@ describe('LocalStorageService (development storage)', () => {
       ct: 'image/jpeg',
       len: '10',
     });
+  });
+});
+
+describe('stable read links (no flicker on screens that poll)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('signingWindow rounds the signing time down to the step and never shortens the lifetime', () => {
+    // 1 000 120 s is 120 s into a 300 s step that began at 999 900 s
+    expect(signingWindow(1_000_120_500, 600, 300)).toEqual({
+      signedAtSec: 999_900,
+      expiresInSec: 900,
+    });
+    expect(signingWindow(1_000_120_500, 600)).toEqual({
+      signedAtSec: 1_000_120,
+      expiresInSec: 600,
+    });
+  });
+
+  it('gives the same link for every call inside one step, and a new one in the next', async () => {
+    const s = serviceWith();
+    const link = () =>
+      s.presignDownload({
+        bucket: 'media',
+        key: KEY,
+        expiresInSec: 600,
+        stableForSec: 300,
+      });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-02T10:00:10Z'));
+    const first = await link();
+    vi.setSystemTime(new Date('2026-11-02T10:04:50Z'));
+    expect(await link()).toBe(first);
+    vi.setSystemTime(new Date('2026-11-02T10:05:01Z'));
+    expect(await link()).not.toBe(first);
+
+    // Still valid for at least the full TTL from the moment it was handed out
+    const exp = Number(new URL(first).searchParams.get('exp'));
+    expect(exp).toBe(Date.parse('2026-11-02T10:00:00Z') / 1000 + 900);
+  });
+
+  it('without a step every call is signed afresh (the old behaviour, kept for admin links)', async () => {
+    const s = serviceWith();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-02T10:00:10Z'));
+    const a = await s.presignDownload({
+      bucket: 'media',
+      key: KEY,
+      expiresInSec: 600,
+    });
+    vi.setSystemTime(new Date('2026-11-02T10:00:20Z'));
+    expect(
+      await s.presignDownload({ bucket: 'media', key: KEY, expiresInSec: 600 }),
+    ).not.toBe(a);
   });
 });
