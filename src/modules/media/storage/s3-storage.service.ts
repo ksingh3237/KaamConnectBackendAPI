@@ -10,7 +10,11 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { EnvVars } from '../../../config/env.validation.js';
 import type { StorageBucket } from '../media-rules.js';
-import { StorageService, type PresignedUpload } from './storage.service.js';
+import {
+  StorageService,
+  signingWindow,
+  type PresignedUpload,
+} from './storage.service.js';
 
 /**
  * S3 (or any S3-compatible service). With no access keys configured the AWS SDK falls back to
@@ -68,14 +72,20 @@ export class S3StorageService extends StorageService {
     bucket: StorageBucket;
     key: string;
     expiresInSec: number;
+    stableForSec?: number;
   }): Promise<string> {
+    const { signedAtSec, expiresInSec } = signingWindow(
+      Date.now(),
+      input.expiresInSec,
+      input.stableForSec,
+    );
     return getSignedUrl(
       this.client,
       new GetObjectCommand({
         Bucket: this.bucketName(input.bucket),
         Key: input.key,
       }),
-      { expiresIn: input.expiresInSec },
+      { expiresIn: expiresInSec, signingDate: new Date(signedAtSec * 1000) },
     );
   }
 

@@ -3,6 +3,7 @@ import { AppException } from '../../common/exceptions/app.exception.js';
 import {
   ADMIN_READ_URL_TTL_SEC,
   MEDIA_RULES,
+  READ_URL_STABLE_SEC,
   READ_URL_TTL_SEC,
   UPLOAD_URL_TTL_SEC,
   buildKey,
@@ -96,6 +97,8 @@ export class MediaService {
       bucket: MEDIA_RULES[purpose].bucket,
       key,
       expiresInSec: READ_URL_TTL_SEC,
+      // Job screens poll every few seconds: the same link each time, so the photos do not reload and flicker
+      stableForSec: READ_URL_STABLE_SEC,
     });
   }
 

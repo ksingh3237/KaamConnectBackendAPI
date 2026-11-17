@@ -69,10 +69,15 @@ export function resolveScheduledFor(
       };
     }
     const fourteen = istAt(today, AFTERNOON_DEFAULT_HOUR);
-    return {
-      ok: true,
-      scheduledFor: fourteen > earliest ? fourteen : earliest,
-    };
+    const start = fourteen > earliest ? fourteen : earliest;
+    // In the evening "this afternoon" is over: refuse rather than quietly turn it into "in half an hour"
+    if (start >= istAt(today, AFTERNOON_TO_HOUR))
+      return {
+        ok: false,
+        issue:
+          'the afternoon (12:00 to 20:00) is over for today: choose Tomorrow or Immediate',
+      };
+    return { ok: true, scheduledFor: start };
   }
 
   if (Number.isNaN(requested.getTime()))

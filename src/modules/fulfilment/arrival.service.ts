@@ -1,7 +1,9 @@
 import { timingSafeEqual } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AppException } from '../../common/exceptions/app.exception.js';
 import { violatesConstraint } from '../../common/utils/db-errors.js';
+import type { EnvVars } from '../../config/env.validation.js';
 import { Logger } from '@nestjs/common';
 import {
   JobSecurityEventType,
@@ -16,6 +18,7 @@ import {
   type JobView,
 } from '../jobs/job-view.service.js';
 import { transition } from '../jobs/state/job-state-machine.js';
+import { arrivalOpensAt, tooEarly } from './early-arrival.js';
 import { jobNotFound } from './job-access.js';
 
 export { MAX_ARRIVAL_ATTEMPTS };
@@ -46,6 +49,7 @@ export class ArrivalService {
     private readonly prisma: PrismaService,
     private readonly events: JobEventsService,
     private readonly views: JobViewService,
+    private readonly config: ConfigService<EnvVars, true>,
   ) {}
 
   async arrive(
@@ -56,10 +60,17 @@ export class ArrivalService {
   ): Promise<JobView> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, workerId },
-      select: { status: true, arrivalAttempts: true },
+      select: { status: true, arrivalAttempts: true, scheduledFor: true },
     });
     if (!job) throw jobNotFound();
     transition('VERIFY_ARRIVAL', job.status); // 409 unless ASSIGNED
+    // A booked appointment cannot be started hours (or a day) early. Checked before a try is counted.
+    const opensAt = arrivalOpensAt(
+      job.scheduledFor,
+      this.config.get('EARLY_ARRIVAL_MIN', { infer: true }),
+    );
+    if (opensAt && Date.now() < opensAt.getTime())
+      throw tooEarly(job.scheduledFor!, opensAt);
     if (job.arrivalAttempts >= MAX_ARRIVAL_ATTEMPTS) throw codeLocked();
 
     // One job on site at a time. The database enforces it too; this gives the friendly answer first.

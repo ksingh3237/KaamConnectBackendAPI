@@ -6,7 +6,11 @@ import { ConfigService } from '@nestjs/config';
 import { API_PREFIX } from '../../../app.setup.js';
 import type { EnvVars } from '../../../config/env.validation.js';
 import { ANY_KEY_PATTERN, type StorageBucket } from '../media-rules.js';
-import { StorageService, type PresignedUpload } from './storage.service.js';
+import {
+  StorageService,
+  signingWindow,
+  type PresignedUpload,
+} from './storage.service.js';
 
 export const DEV_STORAGE_ROUTE = 'dev-storage';
 
@@ -71,8 +75,14 @@ export class LocalStorageService extends StorageService {
     bucket: StorageBucket;
     key: string;
     expiresInSec: number;
+    stableForSec?: number;
   }): Promise<string> {
-    const exp = Math.floor(Date.now() / 1000) + input.expiresInSec;
+    const { signedAtSec, expiresInSec } = signingWindow(
+      Date.now(),
+      input.expiresInSec,
+      input.stableForSec,
+    );
+    const exp = signedAtSec + expiresInSec;
     const sig = this.sign(['GET', input.bucket, input.key, exp]);
     return Promise.resolve(
       `${this.baseUrl}/${API_PREFIX}/${DEV_STORAGE_ROUTE}/${input.bucket}/${input.key}?exp=${exp}&sig=${sig}`,

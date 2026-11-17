@@ -297,9 +297,29 @@ describe('scheduling and availability (e2e, real PostgreSQL and WebSockets)', ()
       expect(row.scheduledFor).toEqual(istAt(tomorrow, 10));
     });
 
-    it('turns "Afternoon" into 14:00 IST, or half an hour from now if that has passed', async () => {
+    it('turns "Afternoon" into 14:00 IST, or half an hour from now if that has passed, and refuses it in the evening', async () => {
       const customer = await customerIn(t);
       const before = Date.now();
+      // The suite runs at any hour: past 19:30 IST there is no afternoon left today
+      if (
+        before + 30 * MINUTE >=
+        istAt(istDayStart(new Date()), 20).getTime()
+      ) {
+        const refused = await http
+          .post(
+            `${V1}/jobs`,
+            {
+              categoryId: 'plumber',
+              title: 'Kitchen tap leaking',
+              timing: 'AFTERNOON',
+              addressId: customer.addressId,
+            },
+            { token: customer.accessToken },
+          )
+          .expect(422);
+        expect(JSON.stringify(refused.body)).toContain('afternoon');
+        return;
+      }
       const job = await postJob(t, customer, { timing: 'AFTERNOON' });
       const row = await t.prisma.job.findUniqueOrThrow({
         where: { id: job.id },

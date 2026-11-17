@@ -172,7 +172,7 @@ describe('leads and quotes (e2e, real PostgreSQL)', () => {
       const later = await postJob(t, customer, { timing: 'TOMORROW' });
       const sparky = await postJob(t, customer, {
         categoryId: 'electrician',
-        timing: 'AFTERNOON',
+        timing: 'TOMORROW', // not AFTERNOON: that is refused in the evening, and the suite runs at any hour
       });
 
       const get = async (query: string) =>

@@ -321,6 +321,14 @@ export class EnvVars {
   @Max(365)
   SCHEDULE_MAX_DAYS: number = 30;
 
+  // A booked appointment (a job with a time): the worker may enter the arrival code at most this many minutes before
+  // it. Earlier, the job is "booked", not "on the way" (docs/17-booked-appointments.md).
+  @Transform(toNumber)
+  @IsInt()
+  @Min(0)
+  @Max(720)
+  EARLY_ARRIVAL_MIN: number = 60;
+
   // How long a scheduled request keeps collecting quotes (never past its own appointment time).
   @Transform(toNumber)
   @IsInt()
