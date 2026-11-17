@@ -141,7 +141,10 @@ describe('cancelling an assigned job (e2e)', () => {
       const lost = await sendQuote(t, other, job.id, { visitFee: 300 });
       const won = await sendQuote(t, leaver, job.id, { visitFee: 200 });
       await acceptQuote(t, customer, job.id, won.id).expect(200);
-      expect((await feedOf(t, other)).map((l) => l.id)).not.toContain(job.id);
+      // The losing worker keeps the card, marked as given to someone else (docs/18), with nothing to quote on.
+      expect(
+        (await feedOf(t, other)).map((l) => [l.id, l.outcome]),
+      ).toContainEqual([job.id, 'TAKEN_BY_OTHER']);
       t.messaging.reset();
 
       await cancel(leaver, job.id, { reasonCode: 'PERSONAL_EMERGENCY' }).expect(
@@ -154,7 +157,12 @@ describe('cancelling an assigned job (e2e)', () => {
       expect(row.scheduledFor?.toISOString()).toBe(job.scheduledFor);
       expect(row.expiresAt!.getTime()).toBeGreaterThan(Date.now());
 
-      expect((await feedOf(t, other)).map((l) => l.id)).toContain(job.id);
+      // Open again: back on the radar as a plain lead, once.
+      expect(
+        (await feedOf(t, other))
+          .filter((l) => l.id === job.id)
+          .map((l) => l.outcome),
+      ).toEqual([null]);
       await eventually(async () =>
         t.messaging.sent.filter(
           (m) => m.data.type === 'NEW_LEAD' && m.data.jobId === job.id,
@@ -561,12 +569,12 @@ describe('cancelling an assigned job (e2e)', () => {
       const worker = await verifiedWorkerIn(t);
       const res = await history(worker).expect(200);
       expect(res.body).toEqual({
-        summary: { windowDays: 30, warnAt: 3, recent: 0, warn: false },
+        summary: { windowDays: 30, warnAt: 5, recent: 0, warn: false },
         items: [],
       });
     });
 
-    it('lists a re-opened back-out (which leaves their job list) and warns from the third of their own', async () => {
+    it('lists a re-opened back-out (which leaves their job list) and warns from the fifth of their own (a warning only: leads and quoting stay open)', async () => {
       const worker = await verifiedWorkerIn(t);
       const first = await backOut(worker, 'VEHICLE_PROBLEM');
       await backOut(worker, 'TOO_FAR');
@@ -582,7 +590,7 @@ describe('cancelling an assigned job (e2e)', () => {
 
       await backOut(worker, 'DOUBLE_BOOKED');
       res = await history(worker).expect(200);
-      expect(res.body.summary).toMatchObject({ recent: 3, warn: true });
+      expect(res.body.summary).toMatchObject({ recent: 3, warn: false });
       expect(
         res.body.items.map((i: { reasonCode: string }) => i.reasonCode),
       ).toEqual([
@@ -607,6 +615,19 @@ describe('cancelling an assigned job (e2e)', () => {
       expect(jobs.body.items.map((i: { id: string }) => i.id)).not.toContain(
         first,
       );
+
+      // The fourth does not warn yet, the fifth does.
+      await backOut(worker, 'TOO_FAR');
+      res = await history(worker).expect(200);
+      expect(res.body.summary).toMatchObject({ recent: 4, warn: false });
+      await backOut(worker, 'TOO_FAR');
+      res = await history(worker).expect(200);
+      expect(res.body.summary).toMatchObject({ recent: 5, warn: true });
+
+      // Warned, not blocked: new leads still reach the radar and can be quoted on.
+      const next = await postJob(t, await customerIn(t));
+      expect((await feedOf(t, worker)).map((l) => l.id)).toContain(next.id);
+      await sendQuote(t, worker, next.id);
     });
 
     it('only counts the last 30 days', async () => {
@@ -649,7 +670,7 @@ describe('cancelling an assigned job (e2e)', () => {
       it('lists workers at or over the threshold, most back-outs first, and nobody else', async () => {
         const often = await verifiedWorkerIn(t, { fullName: 'Often Cancels' });
         const sometimes = await verifiedWorkerIn(t, { fullName: 'Sometimes' });
-        for (let i = 0; i < 4; i += 1) await backOut(often, 'VEHICLE_PROBLEM');
+        for (let i = 0; i < 6; i += 1) await backOut(often, 'VEHICLE_PROBLEM');
         for (let i = 0; i < 2; i += 1)
           await backOut(sometimes, 'VEHICLE_PROBLEM');
 
@@ -657,7 +678,7 @@ describe('cancelling an assigned job (e2e)', () => {
           .get(FLAGS, { token: admin.accessToken })
           .expect(200);
         expect(res.body).toMatchObject([
-          { workerId: often.userId, fullName: 'Often Cancels', backOuts: 4 },
+          { workerId: often.userId, fullName: 'Often Cancels', backOuts: 6 },
         ]);
 
         const lower = await http

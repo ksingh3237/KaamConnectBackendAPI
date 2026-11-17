@@ -100,8 +100,9 @@ the app accepts both.
 Not covered (existing behaviour, unchanged): a worker **declining** a direct request (`/direct/decline`) still sends the
 customer only the socket event, not a push.
 
-**Repeat back-outs.** `countsAgainstWorker` rows in the last 30 days are counted (`BACK_OUT_WINDOW_DAYS`); at 3
-(`BACK_OUT_WARN_AT`) the worker is warned in the app. The same count feeds a read-only admin list. Nothing is suspended or
+**Repeat back-outs.** `countsAgainstWorker` rows in the last 30 days are counted (`BACK_OUT_WINDOW_DAYS`); at 5
+(`BACK_OUT_WARN_AT`; 3 until 2026-11-17) the worker is warned in the app. It is a warning only: above it they still see
+leads and may quote. The same count feeds a read-only admin list. Nothing is suspended or
 penalised automatically: a person decides.
 
 ## 7. API

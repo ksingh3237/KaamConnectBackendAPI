@@ -13,6 +13,7 @@ import { NoShowService } from './no-show.service.js';
 import { JobViewService } from './job-view.service.js';
 import { CustomerJobsController, JobsController } from './jobs.controller.js';
 import { JobsService } from './jobs.service.js';
+import { ServiceAvailabilityService } from './service-availability.service.js';
 import { WorkerBackOutService } from './worker-backout.service.js';
 import { WorkerCancellationsController } from './worker-cancellations.controller.js';
 import { WorkerCancellationsService } from './worker-cancellations.service.js';
@@ -41,6 +42,7 @@ import { WorkerCancellationsService } from './worker-cancellations.service.js';
     JobViewService,
     WorkerBackOutService,
     WorkerCancellationsService,
+    ServiceAvailabilityService,
   ],
   exports: [JobEventsService, JobViewService, JobsService],
 })

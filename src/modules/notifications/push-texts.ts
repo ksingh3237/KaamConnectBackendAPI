@@ -185,19 +185,71 @@ export const PushTexts = {
       },
     }),
 
-  bookingConfirmed: (): LocalizedCopy =>
+  /** `wentOnline`: the worker had switched themselves off, and being chosen switched them back on. */
+  bookingConfirmed: (wentOnline = false): LocalizedCopy =>
     localized({
       en: {
         title: 'Booking confirmed',
-        body: 'A customer chose you. Open the job to head over.',
+        body: `A customer chose you. Open the job to head over.${wentOnline ? ' You are online again.' : ''}`,
       },
       hi: {
         title: 'बुकिंग पक्की हो गई',
-        body: 'एक ग्राहक ने आपको चुना है। काम खोलें और रवाना हों।',
+        body: `एक ग्राहक ने आपको चुना है। काम खोलें और रवाना हों।${wentOnline ? ' आप फिर से ऑनलाइन हैं।' : ''}`,
       },
       pa: {
         title: 'ਬੁਕਿੰਗ ਪੱਕੀ ਹੋ ਗਈ',
-        body: 'ਇੱਕ ਗਾਹਕ ਨੇ ਤੁਹਾਨੂੰ ਚੁਣਿਆ ਹੈ। ਕੰਮ ਖੋਲ੍ਹੋ ਅਤੇ ਰਵਾਨਾ ਹੋਵੋ।',
+        body: `ਇੱਕ ਗਾਹਕ ਨੇ ਤੁਹਾਨੂੰ ਚੁਣਿਆ ਹੈ। ਕੰਮ ਖੋਲ੍ਹੋ ਅਤੇ ਰਵਾਨਾ ਹੋਵੋ।${wentOnline ? ' ਤੁਸੀਂ ਫਿਰ ਤੋਂ ਔਨਲਾਈਨ ਹੋ।' : ''}`,
+      },
+    }),
+
+  /** Worker: the customer pressed Decline on their quote. The request is still open, so they may quote again. */
+  quoteDeclined: (jobTitle: string): LocalizedCopy =>
+    localized({
+      en: {
+        title: 'The customer declined your quote',
+        body: `${jobTitle}: the request is still open. You can send a new quote.`,
+      },
+      hi: {
+        title: 'ग्राहक ने आपका कोटेशन मना कर दिया',
+        body: `${jobTitle}: अनुरोध अभी खुला है। आप नया कोटेशन भेज सकते हैं।`,
+      },
+      pa: {
+        title: 'ਗਾਹਕ ਨੇ ਤੁਹਾਡਾ ਕੋਟੇਸ਼ਨ ਮਨ੍ਹਾ ਕਰ ਦਿੱਤਾ',
+        body: `${jobTitle}: ਬੇਨਤੀ ਹਾਲੇ ਖੁੱਲ੍ਹੀ ਹੈ। ਤੁਸੀਂ ਨਵਾਂ ਕੋਟੇਸ਼ਨ ਭੇਜ ਸਕਦੇ ਹੋ।`,
+      },
+    }),
+
+  /** Worker: the customer accepted someone else's quote on a request this worker had quoted on. */
+  quoteNotSelected: (jobTitle: string): LocalizedCopy =>
+    localized({
+      en: {
+        title: 'The customer chose another worker',
+        body: `${jobTitle}: this request is closed. Keep an eye on your radar for new jobs.`,
+      },
+      hi: {
+        title: 'ग्राहक ने दूसरा कारीगर चुन लिया',
+        body: `${jobTitle}: यह अनुरोध बंद हो गया। नए काम के लिए अपना रडार देखते रहें।`,
+      },
+      pa: {
+        title: 'ਗਾਹਕ ਨੇ ਹੋਰ ਕਾਰੀਗਰ ਚੁਣ ਲਿਆ',
+        body: `${jobTitle}: ਇਹ ਬੇਨਤੀ ਬੰਦ ਹੋ ਗਈ। ਨਵੇਂ ਕੰਮ ਲਈ ਆਪਣਾ ਰਡਾਰ ਵੇਖਦੇ ਰਹੋ।`,
+      },
+    }),
+
+  /** Worker: the customer cancelled a request (still open, nobody chosen) that this worker had quoted on. */
+  leadCancelled: (jobTitle: string): LocalizedCopy =>
+    localized({
+      en: {
+        title: 'The customer cancelled the request',
+        body: `${jobTitle}: your quote is no longer needed.`,
+      },
+      hi: {
+        title: 'ग्राहक ने अनुरोध रद्द कर दिया',
+        body: `${jobTitle}: आपके कोटेशन की अब ज़रूरत नहीं है।`,
+      },
+      pa: {
+        title: 'ਗਾਹਕ ਨੇ ਬੇਨਤੀ ਰੱਦ ਕਰ ਦਿੱਤੀ',
+        body: `${jobTitle}: ਤੁਹਾਡੇ ਕੋਟੇਸ਼ਨ ਦੀ ਹੁਣ ਲੋੜ ਨਹੀਂ ਹੈ।`,
       },
     }),
 

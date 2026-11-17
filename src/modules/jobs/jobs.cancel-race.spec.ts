@@ -11,11 +11,17 @@ describe('JobsService.cancel (customer) against a job that changed under them', 
     seen: JobStatus,
     locked: { status: JobStatus; worker_id: string | null } | null,
     visitFee = 0,
+    waitingQuotes: string[] = [],
   ) {
     const tx = {
       $queryRaw: vi.fn().mockResolvedValue(locked ? [locked] : []),
       job: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
-      offer: { updateMany: vi.fn() },
+      offer: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue(waitingQuotes.map((workerId) => ({ workerId }))),
+        updateMany: vi.fn(),
+      },
       billItem: {
         aggregate: vi.fn().mockResolvedValue({ _sum: { amount: visitFee } }),
       },
@@ -46,6 +52,7 @@ describe('JobsService.cancel (customer) against a job that changed under them', 
     const events = {
       statusChanged: vi.fn(),
       leadClosed: vi.fn(),
+      leadCancelled: vi.fn(),
       workerFreed: vi.fn(),
       cancelledByCustomer: vi.fn(),
     };
@@ -138,7 +145,27 @@ describe('JobsService.cancel (customer) against a job that changed under them', 
     });
     expect(events.workerFreed).toHaveBeenCalledWith('worker-1', 'job-1');
     expect(events.leadClosed).not.toHaveBeenCalled();
+    expect(events.leadCancelled).not.toHaveBeenCalled();
     expect(events.cancelledByCustomer).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancelling an open request tells the workers whose quotes were still waiting, read inside the lock', async () => {
+    const { service, tx, events } = build(
+      JobStatus.OPEN,
+      { status: JobStatus.OPEN, worker_id: null },
+      0,
+      ['worker-a', 'worker-b'],
+    );
+    await cancel(service);
+    // Read before the quotes are turned down, or nobody would be found.
+    expect(tx.offer.findMany.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.offer.updateMany.mock.invocationCallOrder[0]!,
+    );
+    expect(events.leadCancelled).toHaveBeenCalledWith(
+      ['worker-a', 'worker-b'],
+      expect.objectContaining({ id: 'job-1' }),
+    );
+    expect(events.leadClosed).toHaveBeenCalledTimes(1);
   });
 
   it('a customer who was shown the on-site screen can decline, and the visit fee is recorded', async () => {

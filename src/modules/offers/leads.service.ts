@@ -24,6 +24,7 @@ import {
   type LeadAvailability,
 } from '../scheduling/availability.service.js';
 import type { LeadsQueryDto } from './dto/offer.dto.js';
+import { leadOutcome, type LeadOutcome } from './lead-outcome.js';
 import { toOfferSummary, type OfferSummary } from './offer-views.js';
 import { visibleOfferCounts } from './visible-offers.js';
 import { placeName } from '../../common/utils/place.js';
@@ -31,6 +32,19 @@ import { placeName } from '../../common/utils/place.js';
 const DEFAULT_LIMIT = 20;
 /** Newest open jobs of the worker's trades considered per request (launch scale: one metro). */
 const CANDIDATE_CAP = 500;
+/**
+ * A lead the worker quoted on stays on their radar this long after it closed (cancelled, given to someone else,
+ * expired), marked with its outcome, so the worker sees what happened instead of the card silently vanishing.
+ */
+export const CLOSED_LEAD_VISIBLE_MS = 24 * 60 * 60 * 1000;
+/** Every status after a worker was chosen. */
+const TAKEN_STATUSES = [
+  JobStatus.ASSIGNED,
+  JobStatus.ARRIVED,
+  JobStatus.IN_PROGRESS,
+  JobStatus.WORK_COMPLETED,
+  JobStatus.COMPLETED,
+];
 
 const leadInclude = (workerId: string) =>
   ({
@@ -76,6 +90,8 @@ export interface LeadItem {
   isDirect: boolean;
   expiresAt: string | null;
   myOffer: OfferSummary | null;
+  /** What became of the lead for this worker (lead-outcome.ts); null while it is simply open. */
+  outcome: LeadOutcome | null;
 }
 
 export interface LeadDetail extends LeadItem {
@@ -92,7 +108,12 @@ export class LeadsService {
     private readonly availability: AvailabilityService,
   ) {}
 
-  /** The Leads Radar: open jobs in the worker's trades within their radius, plus requests addressed to them. */
+  /**
+   * The Leads Radar: open jobs in the worker's trades within their radius, plus requests addressed to them, plus
+   * (for CLOSED_LEAD_VISIBLE_MS) the ones they quoted on that have since closed, each marked with its `outcome`.
+   * The worker's "taking jobs" switch does not hide anything here: switched off they get no alerts, but may still
+   * look and quote.
+   */
   async feed(workerId: string, query: LeadsQueryDto): Promise<Page<LeadItem>> {
     const worker = await this.loadWorker(workerId);
     const tradeIds = worker.trades.map((t) => t.categoryId);
@@ -101,30 +122,61 @@ export class LeadsService {
       : tradeIds;
     if (wanted.length === 0) return { items: [], nextCursor: null };
 
-    const rows = await this.prisma.job.findMany({
-      where: {
-        status: JobStatus.OPEN,
-        expiresAt: { gt: new Date() },
-        customerId: { not: workerId },
-        categoryId: { in: wanted },
-        OR: [{ targetWorkerId: null }, { targetWorkerId: workerId }],
-        // A lead the worker declined leaves their radar.
-        workerLeads: {
-          none: { workerId, response: LeadResponse.DECLINED },
-        },
-        ...(query.filter === 'immediate'
-          ? { timing: JobTiming.IMMEDIATE }
-          : {}),
-        ...(query.filter === 'scheduled'
-          ? { scheduledFor: { not: null } }
-          : {}),
+    const nowDate = new Date();
+    const common = {
+      customerId: { not: workerId },
+      categoryId: { in: wanted },
+      // A lead the worker declined leaves their radar.
+      workerLeads: {
+        none: { workerId, response: LeadResponse.DECLINED },
       },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: CANDIDATE_CAP,
-      include: leadInclude(workerId),
-    });
+      ...(query.filter === 'immediate' ? { timing: JobTiming.IMMEDIATE } : {}),
+      ...(query.filter === 'scheduled' ? { scheduledFor: { not: null } } : {}),
+    } satisfies Prisma.JobWhereInput;
+    const since = new Date(nowDate.getTime() - CLOSED_LEAD_VISIBLE_MS);
 
-    const now = Date.now();
+    const [rows, closedRows] = await Promise.all([
+      this.prisma.job.findMany({
+        where: {
+          ...common,
+          status: JobStatus.OPEN,
+          expiresAt: { gt: nowDate },
+          OR: [{ targetWorkerId: null }, { targetWorkerId: workerId }],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: CANDIDATE_CAP,
+        include: leadInclude(workerId),
+      }),
+      // Closed recently, and this worker had quoted (a worker who backed out of it is not reminded of it).
+      this.prisma.job.findMany({
+        where: {
+          ...common,
+          offers: { some: { workerId, acceptedAt: null } },
+          AND: [
+            { OR: [{ workerId: null }, { workerId: { not: workerId } }] },
+            {
+              OR: [
+                { status: JobStatus.CANCELLED, cancelledAt: { gte: since } },
+                {
+                  status: { in: TAKEN_STATUSES },
+                  assignedAt: { gte: since },
+                },
+                // Past its time, whether or not the expiry sweeper has run yet.
+                {
+                  status: JobStatus.OPEN,
+                  expiresAt: { gte: since, lte: nowDate },
+                },
+              ],
+            },
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: CANDIDATE_CAP,
+        include: leadInclude(workerId),
+      }),
+    ]);
+
+    const now = nowDate.getTime();
     const visible: {
       row: LeadRow;
       distanceKm: number | null;
@@ -137,6 +189,17 @@ export class LeadsService {
       if (row.targetWorkerId === workerId || c.covers)
         visible.push({ row, distanceKm: c.distanceKm, extended: c.extended });
     }
+    // The worker quoted on these, so they stay whatever the distance is now.
+    for (const row of closedRows) {
+      const c = coverageOf(worker, spotOfJob(row), now);
+      visible.push({ row, distanceKm: c.distanceKm, extended: c.extended });
+    }
+    // The two lists never share a job (open-and-current vs closed); merge them back into newest-first order.
+    visible.sort(
+      (a, b) =>
+        b.row.createdAt.getTime() - a.row.createdAt.getTime() ||
+        (a.row.id < b.row.id ? 1 : a.row.id > b.row.id ? -1 : 0),
+    );
     const slots = await this.availability.slotsOf(workerId);
 
     const page = pageNewestFirst(
@@ -155,6 +218,7 @@ export class LeadsService {
     return {
       items: page.items.map((v) =>
         this.toItem(
+          workerId,
           v.row,
           v.distanceKm,
           v.extended,
@@ -167,8 +231,9 @@ export class LeadsService {
   }
 
   /**
-   * One lead in full (photos, voice note). Visible only if it is currently a lead for this worker,
-   * was addressed to them, or they already quoted on it. Everything else is a plain 404.
+   * One lead in full (photos, voice note). Visible only if it is currently a lead for this worker, was addressed to
+   * them, they already quoted on it, or it was sent to them (so an old "new job near you" opens on what became of
+   * it, not on an error). Everything else is a plain 404.
    */
   async detail(workerId: string, jobId: string): Promise<LeadDetail> {
     const worker = await this.loadWorker(workerId);
@@ -181,13 +246,14 @@ export class LeadsService {
     const c = coverageOf(worker, spotOfJob(row));
     const mine = row.targetWorkerId === workerId;
     const quoted = row.offers.length > 0;
+    const delivered = row.workerLeads.length > 0;
     const isCurrentLead =
       row.targetWorkerId === null &&
       row.status === JobStatus.OPEN &&
       (row.expiresAt === null || row.expiresAt.getTime() > Date.now()) &&
       worker.trades.some((t) => t.categoryId === row.categoryId) &&
       c.covers;
-    if (!mine && !quoted && !isCurrentLead) throw notFound();
+    if (!mine && !quoted && !delivered && !isCurrentLead) throw notFound();
 
     const photos = row.media.filter(
       (m) => m.kind === JobMediaKind.PROBLEM_PHOTO,
@@ -195,6 +261,7 @@ export class LeadsService {
     const voice = row.media.find((m) => m.kind === JobMediaKind.VOICE_NOTE);
     return {
       ...this.toItem(
+        workerId,
         row,
         c.distanceKm,
         c.extended,
@@ -229,6 +296,7 @@ export class LeadsService {
   }
 
   private toItem(
+    workerId: string,
     row: LeadRow,
     distanceKm: number | null,
     extended: boolean,
@@ -236,6 +304,10 @@ export class LeadsService {
     offersCount: number,
   ): LeadItem {
     const answer = row.workerLeads[0]?.response ?? null;
+    const mine = row.offers[0] ?? null;
+    const outcome = leadOutcome({ ...row, myOffer: mine }, workerId);
+    // A closed lead has no "can you make it" question left to answer.
+    const closed = outcome !== null && outcome !== 'QUOTE_DECLINED';
     return {
       id: row.id,
       reference: referenceOf(row.jobNumber),
@@ -258,7 +330,7 @@ export class LeadsService {
       extendedReach: extended,
       leadState: answer ?? 'NEW',
       availability:
-        row.status === JobStatus.OPEN
+        row.status === JobStatus.OPEN && !closed
           ? toLeadAvailability(this.availability.assess(slots, row, new Date()))
           : null,
       postedAt: row.createdAt.toISOString(),
@@ -268,7 +340,8 @@ export class LeadsService {
       baseVisitFee: row.category.baseVisitFee,
       isDirect: row.targetWorkerId !== null,
       expiresAt: row.expiresAt?.toISOString() ?? null,
-      myOffer: row.offers[0] ? toOfferSummary(row.offers[0]) : null,
+      myOffer: mine ? toOfferSummary(mine) : null,
+      outcome,
     };
   }
 }

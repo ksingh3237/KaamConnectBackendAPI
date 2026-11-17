@@ -122,9 +122,12 @@ export const ALL_REASON_CODES: readonly string[] = [
 /** Stored when an older app sends no code at all: a worker with no reason is treated as a plain back-out. */
 export const UNSPECIFIED = 'UNSPECIFIED';
 
-/** Worker reliability: this many fault back-outs inside the window earn a warning (and an admin flag). */
+/**
+ * Worker reliability: this many fault back-outs inside the window earn a warning (and an admin flag). A warning only:
+ * however many there are, the worker keeps seeing leads and may quote. 5 since 2026-11-17 (was 3), product owner's call.
+ */
 export const BACK_OUT_WINDOW_DAYS = 30;
-export const BACK_OUT_WARN_AT = 3;
+export const BACK_OUT_WARN_AT = 5;
 
 export interface ResolvedReason {
   code: string;

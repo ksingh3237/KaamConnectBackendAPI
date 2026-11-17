@@ -114,5 +114,7 @@ export async function feedOf(t: TestApp, worker: Worker, query = '') {
       reason: string | null;
       nextFreeAt: string | null;
     } | null;
+    /** What became of the lead for this worker (docs/18); null while it is open. */
+    outcome: string | null;
   }[];
 }

@@ -196,7 +196,7 @@ export class OffersService {
       const saved = existing
         ? await tx.offer.update({
             where: { id: existing.id },
-            data: { ...data, status: OfferStatus.PENDING },
+            data: { ...data, status: OfferStatus.PENDING, declinedAt: null },
           })
         : await tx.offer.create({ data: { jobId, workerId, ...data } });
       // Quoting counts as accepting the lead (BR-18).
@@ -349,8 +349,9 @@ export class OffersService {
 
   /**
    * "Decline" beside "Accept Offer": the customer turns one quote down while the request is still open. The quote
-   * becomes REJECTED (hidden from the customer, like the ones that lose when another is accepted) and the worker is
-   * told live through `offer.rejected`. As with any rejected quote, the worker may quote again, for example cheaper.
+   * becomes REJECTED (hidden from the customer, like the ones that lose when another is accepted) with `declinedAt`
+   * set, so the worker's radar can say why. The worker is told live through `offer.rejected` and by push + inbox.
+   * As with any rejected quote, the worker may quote again, for example cheaper.
    * Racing an accept is safe: the accept only takes a quote that is still PENDING, inside its own transaction.
    */
   async decline(
@@ -360,7 +361,7 @@ export class OffersService {
   ): Promise<{ offerId: string; status: OfferStatus }> {
     const job = await this.prisma.job.findFirst({
       where: { id: jobId, customerId },
-      select: { status: true, targetWorkerId: true },
+      select: { status: true, targetWorkerId: true, title: true },
     });
     if (!job) throw notFound('Job');
     const offer = await this.prisma.offer.findFirst({
@@ -372,13 +373,14 @@ export class OffersService {
 
     const declined = await this.prisma.offer.updateMany({
       where: { id: offerId, status: OfferStatus.PENDING },
-      data: { status: OfferStatus.REJECTED },
+      data: { status: OfferStatus.REJECTED, declinedAt: new Date() },
     });
     if (declined.count !== 1) throw offerNotPending();
     this.publisher.toUser(offer.workerId, RealtimeEvent.OFFER_REJECTED, {
       jobId,
       offerId,
     });
+    this.events.quoteDeclined(offer.workerId, { id: jobId, title: job.title });
     return { offerId, status: OfferStatus.REJECTED };
   }
 
@@ -393,7 +395,7 @@ export class OffersService {
   ): Promise<AcceptedJob> {
     const arrivalCode = generateArrivalCode();
 
-    const { acceptedWorkerId, rejected } = await this.prisma
+    const { acceptedWorkerId, rejected, wentOnline } = await this.prisma
       .$transaction(async (tx) => {
         const job = await tx.job.findFirst({
           where: { id: jobId, customerId },
@@ -476,7 +478,18 @@ export class OffersService {
             amount: offer.visitFee,
           },
         });
-        return { acceptedWorkerId: offer.workerId, rejected: others };
+        // A worker may quote while switched off ("not taking jobs"); being chosen puts them back on, the way a driver
+        // who accepts a ride is online. Conditional, so it only reports a change when there was one: a worker who was
+        // already on gets no "you are online again", and a repeated accept cannot flip anything twice.
+        const switchedOn = await tx.workerProfile.updateMany({
+          where: { userId: offer.workerId, isAvailable: false },
+          data: { isAvailable: true },
+        });
+        return {
+          acceptedWorkerId: offer.workerId,
+          rejected: others,
+          wentOnline: switchedOn.count === 1,
+        };
       })
       .catch((error: unknown) => {
         throw this.availability.asConflict(error, 'customer');
@@ -497,8 +510,12 @@ export class OffersService {
         offerId: other.id,
       });
     }
+    this.events.quoteNotSelected(
+      rejected.map((o) => o.workerId),
+      assigned,
+    );
     this.events.statusChanged(assigned);
-    this.events.bookingConfirmed(assigned);
+    this.events.bookingConfirmed(assigned, wentOnline);
     await this.events.leadClosed(assigned, 'ASSIGNED', [
       acceptedWorkerId,
       ...rejected.map((o) => o.workerId),

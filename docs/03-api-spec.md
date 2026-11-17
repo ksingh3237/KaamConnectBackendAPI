@@ -367,7 +367,8 @@ Everything is under `/api/v1` and needs a login. "Needs" is the profile the call
 | `POST /jobs/:id/cancel` `{reasonCode?, reason?}` | customer (owner) | OPEN, ASSIGNED or ARRIVED → CANCELLED; waiting quotes are rejected. The assigned worker is told by push and inbox (`docs/13-cancellation.md`) |
 | `GET /jobs/:id/offers?sort=fee\|eta` | customer (owner) | Compare Offers: live quotes (waiting or accepted) with a worker card each, `isFastest`, and (§10) `available`, `startsAt`, `nextFreeAt` |
 | `POST /jobs/:id/offers/:offerId/accept` | customer (owner) | → `{status:"ASSIGNED", arrivalCode, booking:{startAt,endAt,confirmedAt}, worker}`; `409 WORKER_UNAVAILABLE` if the worker has since taken a clashing booking (§10) |
-| `POST /jobs/:id/offers/:offerId/decline` | customer (owner) | Turns one waiting quote down (the Decline button beside Accept): → `{offerId, status:"REJECTED"}`; the worker gets `offer.rejected` and may quote again. `409 JOB_NOT_OPEN` once the job is not OPEN, `409 OFFER_NOT_PENDING` if the quote is no longer waiting, `404` for another job's quote |
+| `POST /jobs/:id/offers/:offerId/decline` | customer (owner) | Turns one waiting quote down (the Decline button beside Accept): → `{offerId, status:"REJECTED"}`; the worker gets `offer.rejected` and a `QUOTE_DECLINED` push, and may quote again. `409 JOB_NOT_OPEN` once the job is not OPEN, `409 OFFER_NOT_PENDING` if the quote is no longer waiting, `404` for another job's quote |
+| `GET /jobs/availability?categoryId=&areaId=&lat=&lng=&timing=&scheduledFor=` | any signed-in user | Post Job's warning: `{state: NONE \| ALL_BUSY \| AVAILABLE, scheduledFor}`. Advisory only (`docs/18-quote-outcomes-availability-wallet.md`) |
 | `POST /jobs/:id/direct/accept` · `/direct/decline` | the requested worker | Answers a direct booking → job view |
 | `GET /leads?filter=all\|immediate&categoryId=&limit=&cursor=` | verified worker | Leads Radar (§9.2) |
 | `GET /leads/:id` | verified worker | Full lead: photos, voice note; never the address or a phone |
@@ -440,8 +441,9 @@ Connect to namespace **`/realtime`** with `auth: { token: <access JWT> }`. Refus
 | `direct.request` | only the requested worker | same, with `isDirect:true` and `expiresAt` |
 | `offer.new` / `offer.updated` | the job's customer | `jobId, offerId, visitFee, etaMinutes, message, status, worker:{id,name,rating,reviewsCount}` |
 | `offer.accepted` | the winning worker | `{jobId, offerId}` |
-| `offer.rejected` | workers whose waiting quote lost | `{jobId, offerId}` |
+| `offer.rejected` | workers whose waiting quote lost, or was declined | `{jobId, offerId}` |
 | `lead.closed` | covering workers that did not get a more specific message | `{id, reason: ASSIGNED \| CANCELLED \| EXPIRED}` |
+| `worker.availability` | the worker, when being chosen switched them back on | `{isAvailable: true, reason: "BOOKING_CONFIRMED", jobId}` |
 | `job.status` | the customer and the involved worker | `{jobId, status, at}` |
 | `direct.declined` / `direct.expired` | the customer | `{jobId}` |
 
@@ -463,7 +465,7 @@ Rules and reasons: `01-requirements.md` (FR-SCHEDULING, BR-13 to BR-22, A-13 to 
 | `POST /leads/:id/decline` | verified worker | Hides the lead and stops further pushes about it. `200 {jobId, state:"DECLINED"}`. `409 OFFER_EXISTS` while the worker has a live quote (withdraw it first). A worker may accept again later while the request is open |
 | `POST /leads/:id/offers` | verified worker | Unchanged body. Now also refused with `409 SCHEDULE_CONFLICT` if the worker cannot make the time; counts as accepting the lead |
 | `PATCH /offers/:id` | verified worker | Changing `etaMinutes` re-checks the schedule (`409 SCHEDULE_CONFLICT`) |
-| `GET /leads?filter=all\|immediate\|scheduled` | verified worker | `scheduled` = jobs booked for a time. Declined leads are left out |
+| `GET /leads?filter=all\|immediate\|scheduled` | verified worker | `scheduled` = jobs booked for a time. Declined leads are left out. Each lead has `outcome` (null while open); leads the worker quoted on stay 24 h after closing, marked (`docs/18-quote-outcomes-availability-wallet.md`) |
 | `GET /workers/me/schedule?from=&to=&limit=` | any worker profile | The calendar: `{inProgress: Booking\|null, upcoming: Booking[]}`; `Booking = {jobId, reference, title, status, category, areaName, cityName, scheduledFor, startAt, endAt, durationMin, onSite}`. Works while the profile is under review |
 | `GET/PATCH/PUT /workers/me` | worker | New `scheduledRadiusKm` ∈ 3, 6, 12, 25, 50 or `null` (PATCH). Must not be smaller than `radiusKm` (`422`) |
 
@@ -644,7 +646,8 @@ No database migration was needed: the `reviews` table, the worker's `rating_sum`
 | Method & path | Who | Notes |
 |---|---|---|
 | `POST /jobs/:id/review` `{rating, tags?, tipAmount?}` | the job's customer, job COMPLETED (payment recorded) | `rating` integer 1–5 (required); `tags` any of PUNCTUAL, FAIR_PRICE, CLEAN_WORK, POLITE, EXPERT_SKILL, each at most once (default none); `tipAmount` whole ₹0–5000 (default 0), **recorded only**: the tip is paid to the worker directly and is not part of the bill, the payment or the earnings (Q-8). There is no free-text comment; unknown fields are rejected. `201 {id, jobId, rating, tags, tipAmount, createdAt, worker:{id, rating, reviewsCount}}`. `409 ALREADY_REVIEWED` (a review is final; there is no edit), `409 REVIEW_NOT_ALLOWED` before COMPLETED or if cancelled, `404` for anyone but the job's customer (including the job's own worker), `403` if the caller has no customer profile |
-| `GET /workers/me/earnings?period=today\|week\|month` | any worker profile (verification not required) | `{period, from, to, timezone:"Asia/Kolkata", amount, jobsDone, platformFee:0, currency:"INR"}`. Default `today`. `amount` = sum of the bills of jobs that reached COMPLETED inside the period, by the time the payment was recorded. `from`/`to` is the half-open range counted, in UTC. Days are Asia/Kolkata days (midnight IST); weeks start Monday; months start on the 1st. Tips are not included |
+| `GET /workers/me/earnings?period=today\|week\|month\|all` | any worker profile (verification not required) | `{period, from, to, timezone:"Asia/Kolkata", amount, jobsDone, platformFee:0, currency:"INR"}`. Default `today`. `amount` = sum of the bills of jobs that reached COMPLETED inside the period, by the time the payment was recorded. `from`/`to` is the half-open range counted, in UTC. Days are Asia/Kolkata days (midnight IST); weeks start Monday; months start on the 1st; `all` is every paid job (`from` 1970, `to` now). Tips are not included |
+| `GET /workers/me/earnings/jobs?limit=&cursor=` | any worker profile | The Wallet's list: paid jobs, most recently paid first, `{items:[{jobId, reference, title, category, customerName, area, completedAt, amount, method}], nextCursor}` |
 | `GET /me/savings?role=customer\|worker` | any signed-in user | `{commissionSaved, benchmarkRate, currency:"INR", role, jobsCount, jobsTotal}`. `commissionSaved` = `jobsTotal` x `benchmarkRate`, rounded to whole rupees (half up); `jobsTotal` = paid bills of the caller's COMPLETED jobs as customer or as worker. `benchmarkRate` is `COMMISSION_BENCHMARK_RATE` (default 0.20, decision D-5) and must be disclosed in the app: this is a comparison with a competitor's commission, not money the platform holds. Without `role`: the customer side if the user has a customer profile, else the worker side. A user with no jobs gets zeros |
 | `GET /workers/:id` | customer | now also `reviews: {rating, reviewsCount, distribution:{"1".."5"}, latest:[{rating, tags, createdAt}]}` with the ten newest, **without any reviewer identity** |
 
