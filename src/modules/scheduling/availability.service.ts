@@ -66,6 +66,33 @@ export interface BookedWindow {
   endAt: Date;
 }
 
+/** The job columns a booked slot is built from. */
+const slotSelect = {
+  id: true,
+  status: true,
+  bookedStartAt: true,
+  bookedEndAt: true,
+  lat: true,
+  lng: true,
+  area: { select: { lat: true, lng: true } },
+} satisfies Prisma.JobSelect;
+
+function toSlot(
+  r: Prisma.JobGetPayload<{ select: typeof slotSelect }>,
+): Slot[] {
+  return r.bookedStartAt && r.bookedEndAt
+    ? [
+        {
+          jobId: r.id,
+          status: r.status,
+          startAt: r.bookedStartAt,
+          endAt: r.bookedEndAt,
+          point: pointOf(r.lat, r.lng) ?? pointOf(r.area.lat, r.area.lng),
+        },
+      ]
+    : [];
+}
+
 /** PostgreSQL's code for a violated exclusion constraint. */
 const EXCLUSION_VIOLATION = '23P01';
 
@@ -104,30 +131,32 @@ export class AvailabilityService {
         bookedStartAt: { not: null },
         ...(exceptJobId ? { id: { not: exceptJobId } } : {}),
       },
-      select: {
-        id: true,
-        status: true,
-        bookedStartAt: true,
-        bookedEndAt: true,
-        lat: true,
-        lng: true,
-        area: { select: { lat: true, lng: true } },
-      },
+      select: slotSelect,
       orderBy: { bookedStartAt: 'asc' },
     });
-    return rows.flatMap((r) =>
-      r.bookedStartAt && r.bookedEndAt
-        ? [
-            {
-              jobId: r.id,
-              status: r.status,
-              startAt: r.bookedStartAt,
-              endAt: r.bookedEndAt,
-              point: pointOf(r.lat, r.lng) ?? pointOf(r.area.lat, r.area.lng),
-            },
-          ]
-        : [],
+    return rows.flatMap(toSlot);
+  }
+
+  /** `slotsOf` for many workers in one query; a worker with no bookings maps to an empty list. */
+  async slotsOfMany(
+    workerIds: readonly string[],
+  ): Promise<Map<string, Slot[]>> {
+    const byWorker = new Map<string, Slot[]>(
+      workerIds.map((id) => [id, [] as Slot[]]),
     );
+    if (workerIds.length === 0) return byWorker;
+    const rows = await this.prisma.job.findMany({
+      where: {
+        workerId: { in: [...workerIds] },
+        status: { in: [...OCCUPYING_STATUSES] },
+        bookedStartAt: { not: null },
+      },
+      select: { ...slotSelect, workerId: true },
+      orderBy: { bookedStartAt: 'asc' },
+    });
+    for (const row of rows)
+      if (row.workerId) byWorker.get(row.workerId)?.push(...toSlot(row));
+    return byWorker;
   }
 
   /**

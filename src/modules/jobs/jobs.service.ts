@@ -402,6 +402,11 @@ export class JobsService {
           409,
           'This job can no longer be cancelled',
         );
+      // Workers whose quote was still waiting are told the request is gone (push + inbox, after commit).
+      const waiting = await tx.offer.findMany({
+        where: { jobId, status: OfferStatus.PENDING },
+        select: { workerId: true },
+      });
       await tx.offer.updateMany({
         where: { jobId, status: OfferStatus.PENDING },
         data: { status: OfferStatus.REJECTED },
@@ -418,7 +423,12 @@ export class JobsService {
         reopened: false,
         visitFeeDue: feeDue,
       });
-      return { stage, workerId, visitFeeDue: feeDue };
+      return {
+        stage,
+        workerId,
+        visitFeeDue: feeDue,
+        quoted: waiting.map((o) => o.workerId),
+      };
     });
 
     const cancelled = await this.prisma.job.findUniqueOrThrow({
@@ -426,8 +436,10 @@ export class JobsService {
       include: jobInclude,
     });
     this.events.statusChanged(cancelled);
-    if (outcome.stage === JobStatus.OPEN)
+    if (outcome.stage === JobStatus.OPEN) {
+      this.events.leadCancelled(outcome.quoted, cancelled);
       await this.events.leadClosed(cancelled, 'CANCELLED');
+    }
     // An assigned worker is free again: ask their app for a fresh location (BR-21).
     if (outcome.stage !== JobStatus.OPEN && outcome.workerId)
       this.events.workerFreed(outcome.workerId, jobId);

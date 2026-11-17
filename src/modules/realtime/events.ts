@@ -17,6 +17,7 @@ export const RealtimeEvent = {
   JOB_LOCATION: 'job.location',
   BILL_UPDATED: 'bill.updated',
   JOB_REOPENED: 'job.reopened',
+  WORKER_AVAILABILITY: 'worker.availability',
   ARRIVAL_CODE_RESET: 'job.arrival_code_reset',
   SOS_ACKNOWLEDGED: 'sos.acknowledged',
   SOS_RESOLVED: 'sos.resolved',
@@ -111,4 +112,11 @@ export interface ArrivalCodeResetPayload {
 export interface JobReopenedPayload {
   jobId: string;
   reason: 'WORKER_BACKED_OUT';
+}
+
+/** The worker's 'taking jobs' switch was changed by the server (being chosen for a job switches an offline worker back on). */
+export interface WorkerAvailabilityPayload {
+  isAvailable: boolean;
+  reason: 'BOOKING_CONFIRMED';
+  jobId: string;
 }

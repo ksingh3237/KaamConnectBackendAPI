@@ -321,9 +321,9 @@ describe('worker no-show (e2e)', () => {
       });
     });
 
-    const threeNoShows = async (worker: Worker) => {
+    const fiveNoShows = async (worker: Worker) => {
       const ids: string[] = [];
-      for (let i = 0; i < 3; i += 1) {
+      for (let i = 0; i < 5; i += 1) {
         const customer = await customerIn(t);
         const { job } = await lateJob(customer, worker, GRACE_MIN + 1);
         await sweeper.sweep();
@@ -338,13 +338,13 @@ describe('worker no-show (e2e)', () => {
           .expect(200)
       ).body;
 
-    it('counts toward the 3-in-30-days warning, lists as automatic in the worker history, and shows in the admin flag list', async () => {
+    it('counts toward the 5-in-30-days warning, lists as automatic in the worker history, and shows in the admin flag list', async () => {
       const worker = await verifiedWorkerIn(t, { fullName: 'Often Late' });
-      await threeNoShows(worker);
+      await fiveNoShows(worker);
 
       const body = await summary(worker);
-      expect(body.summary).toMatchObject({ recent: 3, warn: true });
-      expect(body.items).toHaveLength(3);
+      expect(body.summary).toMatchObject({ recent: 5, warn: true });
+      expect(body.items).toHaveLength(5);
       expect(body.items[0]).toMatchObject({
         reasonCode: 'NO_SHOW',
         reason: 'The worker did not arrive in time',
@@ -355,13 +355,13 @@ describe('worker no-show (e2e)', () => {
         await http.get(FLAGS, { token: admin.accessToken }).expect(200)
       ).body;
       expect(flags).toMatchObject([
-        { workerId: worker.userId, fullName: 'Often Late', backOuts: 3 },
+        { workerId: worker.userId, fullName: 'Often Late', backOuts: 5 },
       ]);
     });
 
     it('an admin can excuse one: the record stays, the count drops, the flag goes', async () => {
       const worker = await verifiedWorkerIn(t);
-      const [first] = await threeNoShows(worker);
+      const [first] = await fiveNoShows(worker);
       const row = (await rowsOf(first!))[0]!;
       const excuse = (id: string, token = admin.accessToken) =>
         http.post(`${V1}/admin/cancellations/${id}/excuse`, {}, { token });
@@ -372,7 +372,7 @@ describe('worker no-show (e2e)', () => {
         { countsAgainstWorker: false, reasonCode: 'NO_SHOW' },
       ]);
       expect((await summary(worker)).summary).toMatchObject({
-        recent: 2,
+        recent: 4,
         warn: false,
       });
       expect(

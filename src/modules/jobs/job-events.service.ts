@@ -17,6 +17,7 @@ import {
   type JobStatusPayload,
   type LeadClosedPayload,
   type LocationRefreshPayload,
+  type WorkerAvailabilityPayload,
 } from '../realtime/events.js';
 import { RealtimePublisher } from '../realtime/realtime-publisher.js';
 import { LeadDeliveryService } from '../scheduling/lead-delivery.service.js';
@@ -216,15 +217,21 @@ export class JobEventsService {
     }
   }
 
-  /** The booking is final: tells the customer and the worker which window is reserved. */
-  bookingConfirmed(job: {
-    id: string;
-    customerId: string;
-    workerId: string | null;
-    bookedStartAt: Date | null;
-    bookedEndAt: Date | null;
-    bookingConfirmedAt: Date | null;
-  }): void {
+  /**
+   * The booking is final: tells the customer and the worker which window is reserved. `wentOnline`: being chosen
+   * switched an offline worker's "taking jobs" back on, so their app is told to show it and the push says so.
+   */
+  bookingConfirmed(
+    job: {
+      id: string;
+      customerId: string;
+      workerId: string | null;
+      bookedStartAt: Date | null;
+      bookedEndAt: Date | null;
+      bookingConfirmedAt: Date | null;
+    },
+    wentOnline = false,
+  ): void {
     if (!job.workerId || !job.bookedStartAt || !job.bookedEndAt) return;
     const payload: BookingConfirmedPayload = {
       jobId: job.id,
@@ -242,9 +249,57 @@ export class JobEventsService {
       RealtimeEvent.BOOKING_CONFIRMED,
       payload,
     );
+    if (wentOnline) {
+      const online: WorkerAvailabilityPayload = {
+        isAvailable: true,
+        reason: 'BOOKING_CONFIRMED',
+        jobId: job.id,
+      };
+      this.publisher.toUser(
+        job.workerId,
+        RealtimeEvent.WORKER_AVAILABILITY,
+        online,
+      );
+    }
     void this.notifications.sendPush(job.workerId, {
       type: NotificationType.BOOKING_CONFIRMED,
-      ...PushTexts.bookingConfirmed(),
+      ...PushTexts.bookingConfirmed(wentOnline),
+      data: { jobId: job.id },
+    });
+  }
+
+  /** The customer pressed Decline on one quote (`offer.rejected` is sent live as well); push + inbox for its worker. */
+  quoteDeclined(workerId: string, job: { id: string; title: string }): void {
+    void this.notifications.sendPush(workerId, {
+      type: NotificationType.QUOTE_DECLINED,
+      ...PushTexts.quoteDeclined(job.title),
+      data: { jobId: job.id },
+    });
+  }
+
+  /** The customer accepted another quote: push + inbox for every worker whose quote was still waiting. */
+  quoteNotSelected(
+    workerIds: readonly string[],
+    job: { id: string; title: string },
+  ): void {
+    void this.notifications.sendPushToMany(workerIds, {
+      type: NotificationType.QUOTE_NOT_SELECTED,
+      ...PushTexts.quoteNotSelected(job.title),
+      data: { jobId: job.id },
+    });
+  }
+
+  /**
+   * The customer cancelled a request nobody had been chosen for: push + inbox for the workers whose quote was still
+   * waiting. Workers who only saw the lead get the live `lead.closed` (leadClosed) and no push: nothing of theirs ended.
+   */
+  leadCancelled(
+    workerIds: readonly string[],
+    job: { id: string; title: string },
+  ): void {
+    void this.notifications.sendPushToMany(workerIds, {
+      type: NotificationType.LEAD_CANCELLED,
+      ...PushTexts.leadCancelled(job.title),
       data: { jobId: job.id },
     });
   }

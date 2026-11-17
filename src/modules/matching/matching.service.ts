@@ -147,6 +147,40 @@ export class MatchingService {
     return result;
   }
 
+  /**
+   * Like findCoveringWorkers, but switched-off workers are included and flagged: the Post Job screen's "is anyone
+   * there for this?" tells "nobody does this here" apart from "they exist but are offline or booked".
+   * Deactivated accounts are left out (they can never take a job).
+   */
+  async findServingWorkers(input: {
+    categoryId: string;
+    customerId?: string;
+    spot: Spot;
+  }): Promise<(CoveringWorker & { isAvailable: boolean })[]> {
+    const workers = await this.prisma.workerProfile.findMany({
+      where: {
+        verificationStatus: VerificationStatus.VERIFIED,
+        user: { isActive: true },
+        trades: { some: { categoryId: input.categoryId } },
+        ...(input.customerId ? { userId: { not: input.customerId } } : {}),
+      },
+      select: { ...workerGeoSelect, isAvailable: true },
+      take: WORKER_CAP,
+    });
+    const now = Date.now();
+    const result: (CoveringWorker & { isAvailable: boolean })[] = [];
+    for (const worker of workers) {
+      const c = coverageOf(worker, input.spot, now);
+      if (c.covers)
+        result.push({
+          workerId: worker.userId,
+          distanceKm: c.distanceKm,
+          isAvailable: worker.isAvailable,
+        });
+    }
+    return result;
+  }
+
   /** Coverage of one worker, or null if they are not a verified worker. */
   async coverageForWorker(
     workerId: string,

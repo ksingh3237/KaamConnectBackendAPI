@@ -12,9 +12,11 @@ import {
   IsUUID,
   Length,
   Matches,
+  IsNumber,
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Trim } from '../../../common/validators/trim.js';
@@ -97,6 +99,53 @@ export class CreateJobDto {
   @ValidateNested()
   @Type(() => VoiceNoteDto)
   voiceNote?: VoiceNoteDto;
+}
+
+/**
+ * "Is anyone there for this?" asked by the Post Job screen while the customer fills it in (GET /jobs/availability).
+ * Same service, place and time fields as a job, as query parameters.
+ */
+export class ServiceAvailabilityQueryDto {
+  @IsString()
+  @Length(1, 40)
+  categoryId!: string;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  areaId!: number;
+
+  // The job's own GPS point when the customer has one; both or neither.
+  @ValidateIf(
+    (o: ServiceAvailabilityQueryDto) =>
+      o.lat !== undefined || o.lng !== undefined,
+  )
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  lat?: number;
+
+  @ValidateIf(
+    (o: ServiceAvailabilityQueryDto) =>
+      o.lat !== undefined || o.lng !== undefined,
+  )
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  lng?: number;
+
+  @IsEnum(JobTiming)
+  timing!: JobTiming;
+
+  /** As on CreateJobDto: required for SCHEDULED, optional for AFTERNOON / TOMORROW, forbidden for IMMEDIATE. */
+  @IsOptional()
+  @IsISO8601({ strict: true, strictSeparator: true })
+  @Matches(/(Z|[+-]\d{2}:\d{2})$/, {
+    message: 'scheduledFor must include a time zone offset such as +05:30 or Z',
+  })
+  scheduledFor?: string;
 }
 
 /** "Book Pro": the same job fields, addressed to one worker who must accept. */

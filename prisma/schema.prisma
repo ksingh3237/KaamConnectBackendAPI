@@ -141,6 +141,9 @@ enum NotificationType {
   JOB_WORKER_LATE // customer: the assigned worker has passed their arrival time
   JOB_YOU_ARE_LATE // worker: you have passed your arrival time; the job is released automatically after the grace period
   JOB_NO_SHOW_RELEASED // worker: the job was released because you did not arrive (counts as a cancellation)
+  QUOTE_DECLINED // worker: the customer turned your quote down; the request is still open, you may quote again
+  QUOTE_NOT_SELECTED // worker: the customer chose another worker's quote
+  LEAD_CANCELLED // worker: the customer cancelled a request you had quoted on
 }
 
 // ───────────────────────── Identity & auth ─────────────────────────
@@ -564,6 +567,7 @@ model Offer {
   message    String?     @db.VarChar(300)
   status     OfferStatus @default(PENDING)
   acceptedAt DateTime?   @map("accepted_at") @db.Timestamptz(3) // when the customer accepted this quote
+  declinedAt DateTime?   @map("declined_at") @db.Timestamptz(3) // the customer pressed Decline on this quote (REJECTED for that reason, not because another won); cleared when the worker quotes again
   createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 

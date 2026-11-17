@@ -122,6 +122,7 @@ describe('leads and quotes (e2e, real PostgreSQL)', () => {
         isDirect: false,
         expiresAt: expect.any(String),
         myOffer: null,
+        outcome: null,
       });
 
       const text = JSON.stringify(res.body);
@@ -366,15 +367,27 @@ describe('leads and quotes (e2e, real PostgreSQL)', () => {
       expect(JSON.stringify(res.body)).not.toContain('House #1402');
     });
 
-    it('is a 404 for a worker who never quoted once the job is closed', async () => {
+    it('once the job is closed: readable (with what happened, no address) by a worker it was sent to, a 404 for anyone else', async () => {
       const bystander = await verifiedWorkerIn(t);
       const winner = await verifiedWorkerIn(t);
       const customer = await customerIn(t);
       const job = await postJob(t, customer);
       const won = await sendQuote(t, winner, job.id);
       await accept(customer, job.id, won.id).expect(200);
-      await http
+      // Joined after the lead went out: it never reached them.
+      const latecomer = await verifiedWorkerIn(t);
+
+      const seen = await http
         .get(`${LEADS}/${job.id}`, { token: bystander.accessToken })
+        .expect(200);
+      expect(seen.body).toMatchObject({
+        status: 'ASSIGNED',
+        outcome: 'TAKEN_BY_OTHER',
+        myOffer: null,
+      });
+      expect(JSON.stringify(seen.body)).not.toContain('House #1402');
+      await http
+        .get(`${LEADS}/${job.id}`, { token: latecomer.accessToken })
         .expect(404);
     });
   });

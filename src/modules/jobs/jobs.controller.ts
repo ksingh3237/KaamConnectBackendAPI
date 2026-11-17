@@ -19,7 +19,12 @@ import {
   CreateJobDto,
   DirectBookingDto,
   ListJobsQueryDto,
+  ServiceAvailabilityQueryDto,
 } from './dto/job.dto.js';
+import {
+  ServiceAvailabilityService,
+  type ServiceAvailability,
+} from './service-availability.service.js';
 import type { JobView } from './job-view.service.js';
 import {
   JobsService,
@@ -32,6 +37,7 @@ export class JobsController {
   constructor(
     private readonly jobs: JobsService,
     private readonly direct: DirectBookingService,
+    private readonly supply: ServiceAvailabilityService,
   ) {}
 
   /** Post Job: broadcast to nearby verified workers. */
@@ -53,6 +59,19 @@ export class JobsController {
   ): Promise<CreatedJob> {
     const { workerId, ...job } = dto;
     return this.jobs.create(user.id, job, workerId);
+  }
+
+  /**
+   * Post Job's early warning: is any worker there for this service, place and time? Advisory; posting is never refused
+   * because of it. Any signed-in person may ask (the screen is shown before the customer profile exists). Declared
+   * before ':id' so it is not taken for a job id.
+   */
+  @Get('availability')
+  availability(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ServiceAvailabilityQueryDto,
+  ): Promise<ServiceAvailability> {
+    return this.supply.check(user.id, query);
   }
 
   /** Customer, assigned worker or requested worker only; the shape depends on who asks. */
